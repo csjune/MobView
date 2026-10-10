@@ -1,0 +1,8 @@
+# build output
+dist/
+web-ext-artifacts/
+*.xpi
+*.zip
+
+node_modules/
+package-lock.json

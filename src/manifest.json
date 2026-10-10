@@ -1,0 +1,56 @@
+{
+  "version": "0.1.0",
+  "manifest_version": 3,
+  "name": "MobView",
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "description": "Switch individual sites to their mobile version with one click on the toolbar button. Other sites stay untouched.",
+  "options_ui": {
+    "open_in_tab": true,
+    "page": "data/options/options.html"
+  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "contextMenus",
+    "declarativeNetRequest"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "strict_min_version": "140.0",
+      "id": "{178dc4b0-ee6a-4116-90ff-5cab6a5ea940}",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  },
+  "background": {
+    "scripts": [
+      "lib/defaults.js",
+      "lib/config.js",
+      "lib/chrome.js",
+      "lib/background.js"
+    ]
+  },
+  "action": {
+    "default_title": "MobView",
+    "default_icon": {
+      "16": "data/icons/OFF/16.png",
+      "32": "data/icons/OFF/32.png",
+      "48": "data/icons/OFF/48.png",
+      "64": "data/icons/OFF/64.png",
+      "128": "data/icons/OFF/128.png"
+    }
+  },
+  "icons": {
+    "16": "data/icons/ON/16.png",
+    "32": "data/icons/ON/32.png",
+    "48": "data/icons/ON/48.png",
+    "64": "data/icons/ON/64.png",
+    "128": "data/icons/ON/128.png"
+  }
+}

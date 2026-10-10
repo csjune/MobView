@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <link type="text/css" rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <div class="logo"></div>
+    <main class="content">
+      <label class="title" for="useragent">Set a mobile user-agent string in the below area</label>
+      <textarea id="useragent"></textarea>
+      <h2 class="title">Mobile View Sites</h2>
+      <ul id="sites" class="sites"></ul>
+      <div class="footer">
+        <div class="checkbox" title="Bypass cache when reloading the page (pressing on the toolbar button)">
+          <label for="bypass-cache">Bypass cache when reloading</label>
+          <input id="bypass-cache" type="checkbox">
+        </div>
+        <button type="button" class="button" id="test" title="Open a page that shows the user-agent websites see">What is my UserAgent?</button>
+      </div>
+    </main>
+    <script type="text/javascript" src="options.js"></script>
+  </body>
+</html>
