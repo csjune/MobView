@@ -1,0 +1,154 @@
+body {
+  margin: 0 auto;
+  padding: 0 10px;
+  font-size: 13px;
+  min-width: 515px;
+  max-width: 1080px;
+  font-family: arial, sans-serif;
+  background-color: #fff;
+}
+
+.content {
+  gap: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.content label {
+  color: #333;
+  user-select: none;
+}
+
+.content textarea {
+  width: 100%;
+  color: #333;
+  height: 200px;
+  padding: 10px;
+  outline: none;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 22px;
+  font-family: monospace;
+  box-sizing: border-box;
+  border: solid 1px rgba(0,0,0,0.1);
+}
+
+.content .title {
+  margin: 0;
+  color: #fff;
+  height: 44px;
+  display: flex;
+  padding: 0 10px;
+  font-size: 13px;
+  user-select: none;
+  font-weight: normal;
+  align-items: center;
+  border-radius: 2px;
+  background-color: #777;
+}
+
+.content .footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.content .checkbox {
+  padding: 0 5px;
+}
+
+.content input[type="checkbox"] {
+  margin: 5px;
+  vertical-align: middle;
+}
+
+.content .button {
+  width: 240px;
+  color: #333;
+  height: 42px;
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  transition: 300ms ease all;
+  background-color: transparent;
+  border: solid 1px rgba(0,0,0,0.25);
+}
+
+.content .button:hover {
+  background-color: rgba(0,0,0,0.05);
+}
+
+.content .sites {
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  max-height: 150px;
+  list-style-type: none;
+  border: solid 1px rgba(0,0,0,0.1);
+}
+
+.content .sites li {
+  display: flex;
+  color: #333;
+  padding: 5px 10px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: solid 1px rgba(0,0,0,0.07);
+}
+
+.content .sites li:last-child {
+  border-bottom: 0;
+}
+
+.content .sites li.empty {
+  color: #777;
+}
+
+.content .sites button {
+  cursor: pointer;
+}
+
+.logo {
+  width: 100%;
+  height: 128px;
+  background: url('../icons/ON/128.png') no-repeat center center;
+  background-size: 64px;
+}
+
+@media (prefers-color-scheme: dark) {
+  html, body {
+    color: #ebebeb;
+    color-scheme: dark;
+    background-color: #1e1e1e;
+  }
+  .content label,
+  .content .button,
+  .content .sites li {
+    color: #ebebeb;
+  }
+  .content textarea {
+    color: #ebebeb;
+    background-color: #1e1e1e;
+    border-color: rgb(255 255 255 / 15%);
+  }
+  .content .title {
+    background-color: #333333;
+  }
+  .content .button {
+    border-color: rgb(255 255 255 / 25%);
+  }
+  .content .button:hover {
+    background-color: rgb(255 255 255 / 5%);
+  }
+  .content .sites {
+    border-color: rgb(255 255 255 / 15%);
+  }
+  .content .sites li {
+    border-bottom-color: rgb(255 255 255 / 10%);
+  }
+  .content .sites li.empty {
+    color: #999;
+  }
+}
