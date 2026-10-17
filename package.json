@@ -1,6 +1,6 @@
 {
   "name": "mobview",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Firefox extension that switches chosen sites to their mobile view with one click",
   "license": "MPL-2.0",
