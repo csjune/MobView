@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {loadBackground, runContentScript, fakeLocalStorage, settle} = require("./harness");
 
+const CHROME = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36";
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
 
 function desktopNavigator() {
@@ -42,13 +43,26 @@ test("storage script writes a custom user-agent", async () => {
   assert.equal(localStorage.items["mobview-useragent"], "UA2");
 });
 
-test("page script matches navigator values to an Android Chrome user-agent", async () => {
+test("page script matches navigator values to the default Android Firefox user-agent", async () => {
   const {chrome, context, pageScript} = await registeredScripts({});
   const navigator = desktopNavigator();
   runContentScript(pageScript, {chrome, navigator, localStorage: fakeLocalStorage({"mobview-useragent": context.defaults.useragent})});
   assert.deepEqual(navigatorValues(navigator), {
     userAgent: context.defaults.useragent,
-    appVersion: context.defaults.useragent.replace(/^Mozilla\//, ""),
+    appVersion: "5.0 (Android 15)",
+    platform: "Linux armv8l",
+    vendor: "",
+    maxTouchPoints: 5
+  });
+});
+
+test("page script matches navigator values to an Android Chrome user-agent", async () => {
+  const {chrome, pageScript} = await registeredScripts({});
+  const navigator = desktopNavigator();
+  runContentScript(pageScript, {chrome, navigator, localStorage: fakeLocalStorage({"mobview-useragent": CHROME})});
+  assert.deepEqual(navigatorValues(navigator), {
+    userAgent: CHROME,
+    appVersion: CHROME.replace(/^Mozilla\//, ""),
     platform: "Linux armv8l",
     vendor: "Google Inc.",
     maxTouchPoints: 5

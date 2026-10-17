@@ -22,10 +22,12 @@
     const ios = /iPhone|iPad|iPod/.test(useragent);
     const android = /Android/.test(useragent);
     const chrome = /Chrome\//.test(useragent);
+    const firefox = !chrome && /Firefox\//.test(useragent);
     /*  */
     return {
       "userAgent": useragent,
-      "appVersion": useragent.replace(/^Mozilla\//, ''),
+      /* Firefox reports only the first token of the platform part, e.g. "5.0 (Android 14)" */
+      "appVersion": firefox ? "5.0 (" + (/\(([^;)]+)/.exec(useragent) || ["", ""])[1] + ")" : useragent.replace(/^Mozilla\//, ''),
       "platform": ios ? (/iPad/.test(useragent) ? "iPad" : "iPhone") : (android ? "Linux armv8l" : original.platform),
       "vendor": ios ? "Apple Computer, Inc." : (chrome ? "Google Inc." : original.vendor),
       "maxTouchPoints": ios || android ? 5 : original.maxTouchPoints
