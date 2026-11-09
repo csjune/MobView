@@ -1,5 +1,7 @@
 var app = {};
 
+app.backgroundWorker = typeof importScripts === "function";
+
 app.error = function () {
   return chrome.runtime.lastError;
 };
@@ -19,14 +21,17 @@ app.storage = {
   },
   /* the background is the only writer, so the in-memory copy is read from disk once per wake-up */
   "load": function (callback) {
-    if (app.storage.loaded) return callback();
-    chrome.storage.local.get(null, function (e) {
-      app.storage.local = e || {};
-      app.storage.loaded = true;
-      callback();
-    });
+    if (!app.storage.ready) {
+      app.storage.ready = new Promise(function (resolve) {
+        chrome.storage.local.get(null, function (e) {
+          app.storage.local = e || {};
+          resolve();
+        });
+      });
+    }
+    return app.storage.ready.then(callback);
   },
-  "loaded": false
+  "ready": null
 };
 
 /* wraps an event callback so that it runs after the storage has been loaded */
@@ -131,11 +136,6 @@ app.tab = {
   "all": function (callback) {
     chrome.tabs.query({}, function (tabs) {
       if (!chrome.runtime.lastError && tabs) callback(tabs);
-    });
-  },
-  "active": function (callback) {
-    chrome.tabs.query({"active": true, "currentWindow": true}, function (tabs) {
-      callback(!chrome.runtime.lastError && tabs && tabs.length ? tabs[0] : undefined);
     });
   },
   "open": function (url) {

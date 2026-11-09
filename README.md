@@ -1,12 +1,24 @@
 # MobView
 
-Firefox extension that switches chosen sites to their mobile view with one click.
+Firefox and Chrome extension that switches chosen sites to their mobile view with one click.
 
 Click the toolbar button on any site to toggle mobile view for that site only; every
 other site stays untouched. Enabled sites are remembered and can be managed from the
 options page, where you can also set your own user-agent string.
 
-MobView does not collect or transmit any data. Requires Firefox 140 or later.
+MobView does not collect or transmit any data. Requires Firefox 140 or Chrome 119 or later.
+
+## Install in Chrome
+
+1. Run `npm install` and `npm run build:chrome` to build the extension. This creates
+   `dist/chrome/` and `dist/mobview-chrome-<version>.zip`.
+2. Open `chrome://extensions` and turn on **Developer mode**.
+3. Click **Load unpacked** and select `dist/chrome/`. If you already have the ZIP,
+   extract it and select the folder containing `manifest.json`.
+4. Pin MobView from the Extensions menu, then click its icon on a site to toggle
+   mobile view for that site.
+
+Use `npm run build` to build the Firefox XPI.
 
 ## Attribution
 

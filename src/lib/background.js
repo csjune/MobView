@@ -51,8 +51,8 @@ var core = {
     core.queue = core.queue.then(task).catch(function (e) {console.error(e)});
     return core.queue;
   },
-  "load": function () {
-    core.serial(core.register.netrequest);
+  "load": function (restoreScripts) {
+    core.serial(restoreScripts ? core.apply : core.register.netrequest);
     app.contextmenu.create({
       "contexts": ["action"],
       "id": "mobview",
@@ -85,6 +85,15 @@ var core = {
         "type": "modifyHeaders",
         "requestHeaders": [{"operation": "set", "header": "user-agent", "value": config.useragent}]
       };
+      if (app.backgroundWorker) {
+        // Chromium can send its real desktop identity in addition to the User-Agent header.
+        for (const hint of [
+          "ua", "ua-mobile", "ua-platform", "ua-arch", "ua-bitness", "ua-form-factors",
+          "ua-full-version", "ua-full-version-list", "ua-model", "ua-platform-version", "ua-wow64"
+        ]) {
+          action.requestHeaders.push({"operation": "remove", "header": "sec-ch-" + hint});
+        }
+      }
       /*  */
       await app.netrequest.replace([
         {
@@ -167,10 +176,9 @@ var core = {
         }
       }
     },
-    "button": function () {
+    "button": function (tab) {
       return core.serial(async function () {
-        const tab = await new Promise(app.tab.active);
-        if (!tab || !tab.id) return;
+        if (!tab || tab.id === undefined) return;
         /*  */
         const site = core.getSite(tab.url);
         if (!site) return;
@@ -195,9 +203,13 @@ app.on.contextmenu(core.action.test);
 app.on.tabs.activated(core.action.tabs.activated);
 app.on.tabs.updated(core.action.tabs.updated);
 app.on.startup(core.load);
-app.on.installed(core.load);
-
-/* the background is an event page: re-register the content scripts every time it wakes up */
-app.storage.load(function () {
-  core.serial(core.register.scripts);
+app.on.installed(function () {
+  core.load(app.backgroundWorker);
 });
+
+/* Firefox's event page restores its scripts on wake-up. Chrome keeps them registered. */
+if (!app.backgroundWorker) {
+  app.storage.load(function () {
+    core.serial(core.register.scripts);
+  });
+}

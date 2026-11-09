@@ -44,7 +44,7 @@ test("toolbar button toggles mobile view for the current site", async () => {
   const {chrome, state} = loadBackground({tabs});
   await settle();
 
-  chrome.action.onClicked.fire();
+  chrome.action.onClicked.fire(state.tabs[0]);
   await settle();
   assert.deepEqual(state.storage.sites, ["naver.com"]);
   assert.equal(state.rules.length, 2);
@@ -58,7 +58,7 @@ test("toolbar button toggles mobile view for the current site", async () => {
   assert.deepEqual(lastToOptions(state, "sites").data, ["naver.com"]);
   assert.deepEqual(state.reloads.pop(), {tabId: 1, bypassCache: true});
 
-  chrome.action.onClicked.fire();
+  chrome.action.onClicked.fire(state.tabs[0]);
   await settle();
   assert.deepEqual(state.storage.sites, []);
   assert.equal(state.rules.length, 0);
@@ -71,9 +71,9 @@ test("toolbar button toggles mobile view for the current site", async () => {
 test("rapid clicks are processed in order", async () => {
   const {chrome, state} = loadBackground({tabs: [{id: 1, url: "https://www.daum.net/"}]});
   await settle();
-  chrome.action.onClicked.fire();
-  chrome.action.onClicked.fire();
-  chrome.action.onClicked.fire();
+  chrome.action.onClicked.fire(state.tabs[0]);
+  chrome.action.onClicked.fire(state.tabs[0]);
+  chrome.action.onClicked.fire(state.tabs[0]);
   await settle(50);
   assert.deepEqual(state.storage.sites, ["daum.net"]);
   assert.equal(state.rules.length, 2);
@@ -83,7 +83,7 @@ test("rapid clicks are processed in order", async () => {
 test("button does nothing on non-web pages", async () => {
   const {chrome, state} = loadBackground({tabs: [{id: 1, url: "about:addons"}]});
   await settle();
-  chrome.action.onClicked.fire();
+  chrome.action.onClicked.fire(state.tabs[0]);
   await settle();
   assert.equal(state.storage.sites, undefined);
   assert.equal(state.reloads.length, 0);
