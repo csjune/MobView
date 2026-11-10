@@ -6,7 +6,8 @@ Click the toolbar button on any site to toggle mobile view for that site only; e
 other site stays untouched. Enabled sites are remembered and can be managed from the
 options page, where you can also set your own user-agent string.
 
-MobView does not collect or transmit any data. Requires Firefox 140 or Chrome 119 or later.
+MobView stores site choices and preferences on your device and does not use analytics.
+Requires Firefox 140 or Chrome 119 or later.
 
 ## Install in Chrome
 
@@ -19,6 +20,8 @@ MobView does not collect or transmit any data. Requires Firefox 140 or Chrome 11
    mobile view for that site.
 
 Use `npm run build` to build the Firefox XPI.
+
+[MobView privacy policy for Chrome](docs/chrome-web-store/privacy-policy.md)
 
 ## Attribution
 
