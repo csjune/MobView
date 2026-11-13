@@ -1,6 +1,16 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {loadBackground, settle} = require("./harness");
+const {buildChrome, chromeDefaults} = require("../scripts/build-chrome");
+
+function buildChromeTemp(t) {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "mobview-chrome-"));
+  t.after(() => fs.rmSync(outputDir, {recursive: true, force: true}));
+  return buildChrome({outputDir, artifactsDir: null});
+}
 
 function fromOptions(chrome, method, data) {
   chrome.runtime.onMessage.fire({"path": "options-to-background", method, data});
@@ -161,4 +171,46 @@ test("tab events update the icon only when the page changes", async () => {
   chrome.tabs.onActivated.fire({tabId: 1});
   await settle();
   assert.equal(state.icons[1], "ON");
+});
+
+test("chrome service worker loads via importScripts and onInstalled registers scripts, rules, icons, and menu", async (t) => {
+  const {outputDir} = buildChromeTemp(t);
+  const tabs = [{id: 1, url: "https://naver.com/"}, {id: 2, url: "https://daum.net/"}];
+  const {chrome, state, context} = loadBackground({dir: outputDir, tabs, storage: {sites: ["naver.com"]}});
+  await settle();
+  assert.equal(context.app.backgroundWorker, true);
+  assert.equal(state.scripts.length, 0);
+  assert.equal(state.rules.length, 0);
+
+  chrome.runtime.onInstalled.fire({reason: "install"});
+  await settle();
+
+  assert.deepEqual(state.scripts.map((script) => script.id), ["mobview-storage", "mobview-script"]);
+  assert.equal(state.rules.length, 2);
+  assert.deepEqual(state.icons, {1: "ON", 2: "OFF"});
+  assert.deepEqual(state.menus.map((menu) => menu.id), ["mobview"]);
+});
+
+test("chrome DNR rules set Chrome default user-agent and remove all 11 sec-ch-ua headers", async (t) => {
+  const {outputDir} = buildChromeTemp(t);
+  const {chrome, state} = loadBackground({dir: outputDir, storage: {sites: ["naver.com"]}});
+  chrome.runtime.onInstalled.fire({reason: "install"});
+  await settle();
+
+  const removedHints = [
+    "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-ch-ua-arch",
+    "sec-ch-ua-bitness", "sec-ch-ua-form-factors", "sec-ch-ua-full-version",
+    "sec-ch-ua-full-version-list", "sec-ch-ua-model", "sec-ch-ua-platform-version",
+    "sec-ch-ua-wow64"
+  ];
+  const expectedHeaders = [
+    {operation: "set", header: "user-agent", value: chromeDefaults.useragent},
+    ...removedHints.map((header) => ({operation: "remove", header}))
+  ];
+
+  assert.equal(state.rules.length, 2);
+  for (const rule of state.rules) {
+    assert.equal(rule.action.type, "modifyHeaders");
+    assert.deepEqual(rule.action.requestHeaders, expectedHeaders);
+  }
 });

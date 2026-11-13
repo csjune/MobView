@@ -42,6 +42,7 @@ var options = {
       span.textContent = site;
       button.type = "button";
       button.textContent = "Remove";
+      button.setAttribute("aria-label", "Remove " + site);
       button.addEventListener("click", function () {
         background.send("removeSite", {"site": site});
       });

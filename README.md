@@ -7,7 +7,7 @@ other site stays untouched. Enabled sites are remembered and can be managed from
 options page, where you can also set your own user-agent string.
 
 MobView stores site choices and preferences on your device and does not use analytics.
-Requires Firefox 140 or Chrome 119 or later.
+Requires Firefox 140 (142 on Android) or Chrome 119 or later.
 
 ## Install in Chrome
 
@@ -19,7 +19,7 @@ Requires Firefox 140 or Chrome 119 or later.
 4. Pin MobView from the Extensions menu, then click its icon on a site to toggle
    mobile view for that site.
 
-Use `npm run build` to build the Firefox XPI.
+Use `npm run build` to build the Firefox XPI, `npm start` to run temporarily in Firefox, and `npm test` / `npm run lint` to verify.
 
 [MobView privacy policy for Chrome](docs/chrome-web-store/privacy-policy.md)
 

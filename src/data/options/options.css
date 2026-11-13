@@ -2,7 +2,6 @@ body {
   margin: 0 auto;
   padding: 0 10px;
   font-size: 13px;
-  min-width: 515px;
   max-width: 1080px;
   font-family: arial, sans-serif;
   background-color: #fff;
@@ -25,7 +24,6 @@ body {
   color: #333;
   height: 200px;
   padding: 10px;
-  outline: none;
   font-size: 13px;
   font-weight: 600;
   line-height: 22px;
@@ -45,11 +43,13 @@ body {
   font-weight: normal;
   align-items: center;
   border-radius: 2px;
-  background-color: #777;
+  background-color: #767676;
 }
 
 .content .footer {
+  gap: 10px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
 }
@@ -103,11 +103,19 @@ body {
 }
 
 .content .sites li.empty {
-  color: #777;
+  color: #767676;
 }
 
 .content .sites button {
   cursor: pointer;
+}
+
+.content textarea:focus-visible,
+.content .button:focus-visible,
+.content .sites button:focus-visible,
+.content input[type="checkbox"]:focus-visible {
+  outline: 2px solid #0060df;
+  outline-offset: 2px;
 }
 
 .logo {
@@ -150,5 +158,11 @@ body {
   }
   .content .sites li.empty {
     color: #999;
+  }
+  .content textarea:focus-visible,
+  .content .button:focus-visible,
+  .content .sites button:focus-visible,
+  .content input[type="checkbox"]:focus-visible {
+    outline-color: #45a1ff;
   }
 }

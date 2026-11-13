@@ -5,10 +5,9 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const SRC = path.join(__dirname, "..", "src");
-const manifest = JSON.parse(fs.readFileSync(path.join(SRC, "manifest.json"), "utf8"));
 
-function read(file) {
-  return fs.readFileSync(path.join(SRC, file), "utf8");
+function read(file, dir = SRC) {
+  return fs.readFileSync(path.join(dir, file), "utf8");
 }
 
 function event() {
@@ -38,7 +37,16 @@ function createChrome({tabs = [], storage = {}} = {}) {
       onInstalled: event(),
       onStartup: event(),
       /* messages are serialized between extension pages, so keep a copy */
-      sendMessage(message) {state.toOptions.push(structuredClone(message))}
+      sendMessage(message, callback) {
+        const copy = structuredClone(message);
+        if (!copy || copy.path !== "options-to-background") {
+          state.toOptions.push(copy);
+        }
+        setTimeout(() => {
+          chrome.runtime.onMessage.fire(copy);
+          if (typeof callback === "function") callback();
+        });
+      }
     },
     storage: {
       local: {
@@ -68,7 +76,7 @@ function createChrome({tabs = [], storage = {}} = {}) {
     },
     declarativeNetRequest: {
       async getDynamicRules() {return state.rules},
-      async updateDynamicRules({removeRuleIds, addRules}) {
+      async updateDynamicRules({removeRuleIds = [], addRules = []} = {}) {
         const rules = state.rules.filter((rule) => !removeRuleIds.includes(rule.id)).concat(structuredClone(addRules));
         const ids = rules.map((rule) => rule.id);
         if (new Set(ids).size !== ids.length) throw new Error("duplicate rule ids");
@@ -88,20 +96,38 @@ function createChrome({tabs = [], storage = {}} = {}) {
 }
 
 /* runs the background scripts listed in the manifest */
-function loadBackground(options) {
-  const {chrome, state} = createChrome(options);
+function loadBackground({tabs = [], storage = {}, dir = SRC, worker = false} = {}) {
+  const {chrome, state} = createChrome({tabs, storage});
+  const manifest = JSON.parse(read("manifest.json", dir));
   const context = vm.createContext({chrome, console, URL, setTimeout, structuredClone});
-  for (const file of manifest.background.scripts) {
-    vm.runInContext(read(file), context, {filename: file});
+  if (worker || manifest.background.service_worker) {
+    context.importScripts = (...files) => {
+      for (const file of files) {
+        vm.runInContext(read(file, dir), context, {filename: file});
+      }
+    };
+    if (manifest.background.service_worker) {
+      vm.runInContext(read(manifest.background.service_worker, dir), context, {filename: manifest.background.service_worker});
+    } else {
+      context.importScripts(...manifest.background.scripts);
+    }
+  } else {
+    for (const file of manifest.background.scripts) {
+      vm.runInContext(read(file, dir), context, {filename: file});
+    }
   }
   return {chrome, state, context};
 }
 
 /* runs a registered content script entry against a fake page */
-function runContentScript(script, {chrome, navigator = {}, localStorage}) {
-  const context = vm.createContext({chrome, navigator, localStorage});
+function runContentScript(script, {chrome, navigator = {}, localStorage, dir = SRC}) {
+  const context = vm.createContext({
+    chrome: script.world === "MAIN" ? undefined : chrome,
+    navigator,
+    localStorage
+  });
   for (const file of script.js) {
-    vm.runInContext(read(file), context, {filename: file});
+    vm.runInContext(read(file, dir), context, {filename: file});
   }
   return context;
 }
@@ -126,4 +152,4 @@ function settle(ms = 20) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = {loadBackground, runContentScript, fakeLocalStorage, settle, read};
+module.exports = {SRC, loadBackground, runContentScript, fakeLocalStorage, settle, read};
