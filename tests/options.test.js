@@ -6,8 +6,10 @@ const {loadBackground, read, settle} = require("./harness");
 function createElement(tagName, id = "", ownerDocument = null) {
   const children = [];
   const attributes = {};
+  const dataset = {};
   const listeners = {};
   let text = "";
+  if (id === "useragent-error") attributes.hidden = "";
 
   const element = {
     tagName: tagName.toUpperCase(),
@@ -16,7 +18,18 @@ function createElement(tagName, id = "", ownerDocument = null) {
     type: "",
     value: "",
     checked: false,
+    dataset,
     children,
+    get hidden() {
+      return Object.hasOwn(attributes, "hidden");
+    },
+    set hidden(val) {
+      if (val) {
+        attributes.hidden = "";
+      } else {
+        delete attributes.hidden;
+      }
+    },
     get textContent() {
       return children.length ? children.map((child) => child.textContent).join("") : text;
     },
@@ -35,12 +48,23 @@ function createElement(tagName, id = "", ownerDocument = null) {
       if (name === "id") element.id = String(val);
       if (name === "class") element.className = String(val);
       if (name === "type") element.type = String(val);
+      if (name.startsWith("data-")) {
+        const key = name.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
+        dataset[key] = String(val);
+      }
     },
     getAttribute(name) {
       return Object.hasOwn(attributes, name) ? attributes[name] : null;
     },
+    hasAttribute(name) {
+      return Object.hasOwn(attributes, name);
+    },
     removeAttribute(name) {
       delete attributes[name];
+      if (name.startsWith("data-")) {
+        const key = name.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
+        delete dataset[key];
+      }
     },
     append(...nodes) {
       for (const node of nodes) {
@@ -55,34 +79,43 @@ function createElement(tagName, id = "", ownerDocument = null) {
       if (!listeners[eventName]) listeners[eventName] = [];
       listeners[eventName].push(handler);
     },
-    click() {
-      for (const handler of listeners.click || []) {
-        handler({type: "click", target: element, currentTarget: element, preventDefault() {}});
+    dispatch(eventName, init = {}) {
+      const event = {
+        type: eventName,
+        target: element,
+        currentTarget: element,
+        defaultPrevented: false,
+        preventDefault() {
+          event.defaultPrevented = true;
+        },
+        ...init
+      };
+      for (const handler of listeners[eventName] || []) {
+        handler(event);
       }
+      return event;
+    },
+    keydown({key = "Enter", shiftKey = false, isComposing = false, keyCode = 0} = {}) {
+      return element.dispatch("keydown", {key, shiftKey, isComposing, keyCode});
+    },
+    click() {
+      return element.dispatch("click");
     },
     change() {
-      for (const handler of listeners.change || []) {
-        handler({type: "change", target: element, currentTarget: element, preventDefault() {}});
-      }
+      return element.dispatch("change");
     },
     input() {
-      for (const handler of listeners.input || []) {
-        handler({type: "input", target: element, currentTarget: element, preventDefault() {}});
-      }
+      return element.dispatch("input");
     },
     focus() {
       if (ownerDocument) ownerDocument.activeElement = element;
-      for (const handler of listeners.focus || []) {
-        handler({type: "focus", target: element, currentTarget: element, preventDefault() {}});
-      }
+      return element.dispatch("focus");
     },
     blur() {
       if (ownerDocument && ownerDocument.activeElement === element) {
         ownerDocument.activeElement = null;
       }
-      for (const handler of listeners.blur || []) {
-        handler({type: "blur", target: element, currentTarget: element, preventDefault() {}});
-      }
+      return element.dispatch("blur");
     }
   };
   return element;
@@ -114,10 +147,16 @@ function createDocument() {
 
   doc.elements = {
     useragent: createElement("textarea", "useragent", doc),
+    "useragent-error": createElement("p", "useragent-error", doc),
     sites: createElement("ul", "sites", doc),
-    "bypass-cache": createElement("input", "bypass-cache", doc)
+    "bypass-cache": createElement("input", "bypass-cache", doc),
+    "status-announcer": createElement("div", "status-announcer", doc)
   };
   doc.elements["bypass-cache"].type = "checkbox";
+  doc.elements.useragent.setAttribute("aria-invalid", "false");
+  doc.elements.useragent.setAttribute("data-error", "useragent-error");
+  doc.elements["useragent-error"].textContent = "Error: User-Agent must contain only printable ASCII characters.";
+  doc.elements["status-announcer"].setAttribute("aria-live", "polite");
   return doc;
 }
 
@@ -296,4 +335,142 @@ test("clearing #useragent during focused input keeps value before commit and res
   assert.equal("useragent" in state.storage, false);
   assert.equal(state.rules[0].action.requestHeaders[0].value, context.defaults.useragent);
   assert.equal(useragentEl.value, context.defaults.useragent);
+});
+
+test("pressing Enter in #useragent prevents default and flushes immediately", async () => {
+  const {state, document} = await loadOptions({storage: {sites: ["naver.com"]}});
+  const useragentEl = document.getElementById("useragent");
+
+  useragentEl.focus();
+  useragentEl.value = "Enter-Flushed-UA";
+  useragentEl.input();
+
+  const event = useragentEl.keydown({key: "Enter", isComposing: false});
+  assert.equal(event.defaultPrevented, true);
+  await settle();
+
+  assert.equal(state.storage.useragent, "Enter-Flushed-UA");
+  assert.equal(state.rules[0].action.requestHeaders[0].value, "Enter-Flushed-UA");
+});
+
+test("pressing Enter during IME composition does not flush #useragent", async () => {
+  const {chrome, state, document} = await loadOptions({
+    storage: {sites: ["naver.com"], useragent: "Saved-UA"}
+  });
+  const useragentEl = document.getElementById("useragent");
+  const sentMessages = [];
+  const origSendMessage = chrome.runtime.sendMessage;
+  chrome.runtime.sendMessage = (message, callback) => {
+    sentMessages.push(structuredClone(message));
+    return origSendMessage(message, callback);
+  };
+
+  useragentEl.focus();
+  useragentEl.value = "IME-Pending-UA";
+  useragentEl.input();
+
+  useragentEl.keydown({key: "Enter", isComposing: true});
+  await settle();
+  assert.equal(sentMessages.length, 0);
+  assert.equal(state.storage.useragent, "Saved-UA");
+
+  useragentEl.keydown({key: "Enter", isComposing: false, keyCode: 229});
+  await settle();
+  assert.equal(sentMessages.length, 0);
+  assert.equal(state.storage.useragent, "Saved-UA");
+});
+
+test("pasting multiline ASCII in #useragent collapses newline to space on commit", async () => {
+  const {state, document} = await loadOptions({storage: {sites: ["naver.com"]}});
+  const useragentEl = document.getElementById("useragent");
+
+  useragentEl.focus();
+  useragentEl.value = "Custom-UA/1.0\r\nMobile";
+  useragentEl.input();
+  useragentEl.blur();
+  await settle();
+
+  assert.equal(state.storage.useragent, "Custom-UA/1.0 Mobile");
+  assert.equal(state.rules[0].action.requestHeaders[0].value, "Custom-UA/1.0 Mobile");
+  assert.equal(useragentEl.value, "Custom-UA/1.0 Mobile");
+});
+
+test("non-ASCII user-agent shows inline error on commit without sending mid-typing and clears on valid input", async () => {
+  const {chrome, state, document} = await loadOptions({
+    storage: {sites: ["naver.com"], useragent: "Valid-UA/1.0"}
+  });
+  const useragentEl = document.getElementById("useragent");
+  const errorEl = document.getElementById("useragent-error");
+  const sentMessages = [];
+  const origSendMessage = chrome.runtime.sendMessage;
+  chrome.runtime.sendMessage = (message, callback) => {
+    sentMessages.push(structuredClone(message));
+    return origSendMessage(message, callback);
+  };
+
+  useragentEl.focus();
+  useragentEl.value = "Mozilla/5.0 한글";
+  useragentEl.input();
+  await settle(350);
+
+  assert.equal(sentMessages.length, 0);
+  assert.equal(state.storage.useragent, "Valid-UA/1.0");
+  assert.equal(useragentEl.getAttribute("aria-invalid"), "false");
+  assert.equal(useragentEl.getAttribute("aria-describedby"), null);
+  assert.equal(errorEl.hidden, true);
+
+  const enterEvent = useragentEl.keydown({key: "Enter", isComposing: false});
+  assert.equal(enterEvent.defaultPrevented, true);
+  await settle();
+
+  assert.equal(useragentEl.getAttribute("aria-invalid"), "true");
+  assert.equal(useragentEl.getAttribute("aria-describedby"), "useragent-error");
+  assert.equal(errorEl.hidden, false);
+  assert.ok(errorEl.textContent.length > 0);
+  assert.equal(state.storage.useragent, "Valid-UA/1.0");
+
+  useragentEl.value = "Valid-UA/2.0";
+  useragentEl.input();
+  assert.equal(useragentEl.getAttribute("aria-invalid"), "false");
+  assert.equal(useragentEl.getAttribute("aria-describedby"), null);
+  assert.equal(errorEl.hidden, true);
+  await settle(350);
+  assert.equal(state.storage.useragent, "Valid-UA/2.0");
+
+  useragentEl.value = "Mozilla/5.0 한글";
+  useragentEl.input();
+  useragentEl.blur();
+  await settle();
+
+  assert.equal(useragentEl.getAttribute("aria-invalid"), "true");
+  assert.equal(useragentEl.getAttribute("aria-describedby"), "useragent-error");
+  assert.equal(errorEl.hidden, false);
+  assert.equal(state.storage.useragent, "Valid-UA/2.0");
+
+  useragentEl.focus();
+  useragentEl.value = "Valid-UA/3.0";
+  useragentEl.input();
+  assert.equal(useragentEl.getAttribute("aria-invalid"), "false");
+  assert.equal(useragentEl.getAttribute("aria-describedby"), null);
+  assert.equal(errorEl.hidden, true);
+  await settle(350);
+  assert.equal(state.storage.useragent, "Valid-UA/3.0");
+});
+
+test("receiving useragentInvalid from background marks #useragent invalid and shows #useragent-error", async () => {
+  const {chrome, document} = await loadOptions({storage: {sites: ["naver.com"]}});
+  const useragentEl = document.getElementById("useragent");
+  const errorEl = document.getElementById("useragent-error");
+
+  chrome.runtime.onMessage.fire({
+    path: "background-to-options",
+    method: "useragentInvalid",
+    data: {}
+  });
+  await settle();
+
+  assert.equal(useragentEl.getAttribute("aria-invalid"), "true");
+  assert.equal(useragentEl.getAttribute("aria-describedby"), "useragent-error");
+  assert.equal(errorEl.hidden, false);
+  assert.ok(errorEl.textContent.length > 0);
 });

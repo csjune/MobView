@@ -121,6 +121,16 @@ app.contentscripts = {
         try {localStorage.removeItem("mobview-useragent")} catch (e) {}
       }
     }).catch(function () {});
+  },
+  "setTabStorage": function (tabId, ua) {
+    return chrome.scripting.executeScript({
+      "target": {"tabId": tabId, "allFrames": true},
+      "args": [ua],
+      "func": function (value) {
+        try {sessionStorage.setItem("mobview-useragent", value)} catch (e) {}
+        try {localStorage.removeItem("mobview-useragent")} catch (e) {}
+      }
+    }).catch(function () {});
   }
 };
 

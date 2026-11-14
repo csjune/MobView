@@ -25,6 +25,13 @@ test("getBaseDomain groups subdomains under the site", () => {
   const cases = {
     "www.naver.com": "naver.com",
     "m.naver.com": "naver.com",
+    "www.ad.nl": "ad.nl",
+    "www.lg.de": "lg.de",
+    "www.hs.fi": "hs.fi",
+    "www.ed.nl": "ed.nl",
+    "www.gr.ch": "gr.ch",
+    "www.city.kobe.lg.jp": "kobe.lg.jp",
+    "www.seoul.hs.kr": "seoul.hs.kr",
     "www.xxx.or.kr": "xxx.or.kr",
     "news.bbc.co.uk": "bbc.co.uk",
     "sub.example.ac.jp": "example.ac.jp",
@@ -33,17 +40,25 @@ test("getBaseDomain groups subdomains under the site", () => {
     "blog.tistory.com": "blog.tistory.com",
     "localhost": "localhost",
     "192.168.0.1": "192.168.0.1",
+    "[::1]": "[::1]",
+    "[2001:0DB8::1]": "[2001:db8::1]",
+    "www.example.com.": "example.com",
     "example.com": "example.com"
   };
   for (const [hostname, expected] of Object.entries(cases)) {
     assert.equal(context.core.getBaseDomain(hostname), expected, hostname);
   }
   assert.equal(context.core.getBaseDomain(""), null);
+  assert.equal(context.core.getBaseDomain("."), null);
 });
 
 test("getSite only accepts http(s) URLs", () => {
   const {context} = loadBackground();
   assert.equal(context.core.getSite("https://m.naver.com/x"), "naver.com");
+  assert.equal(context.core.getSite("http://[::1]:8080/"), "[::1]");
+  assert.equal(context.core.getSite("http://[2001:0DB8::1]/"), "[2001:db8::1]");
+  assert.equal(context.core.getSite("https://www.example.com./path"), "example.com");
+  assert.equal(context.core.getSite("https://./"), null);
   assert.equal(context.core.getSite("about:addons"), null);
   assert.equal(context.core.getSite("file:///C:/a.html"), null);
   assert.equal(context.core.getSite("not a url"), null);
@@ -51,8 +66,15 @@ test("getSite only accepts http(s) URLs", () => {
 
 test("toolbar button toggles mobile view for the current site", async () => {
   const tabs = [{id: 1, url: "https://m.naver.com/x"}, {id: 2, url: "https://news.naver.com/"}, {id: 3, url: "https://daum.net/"}];
-  const {chrome, state} = loadBackground({tabs});
+  const {chrome, state, context} = loadBackground({tabs});
   await settle();
+
+  let executedBeforeReload = null;
+  const origReload = chrome.tabs.reload;
+  chrome.tabs.reload = (tabId, opts) => {
+    executedBeforeReload = structuredClone(state.executedScripts);
+    origReload(tabId, opts);
+  };
 
   chrome.action.onClicked.fire(state.tabs[0]);
   await settle();
@@ -71,8 +93,18 @@ test("toolbar button toggles mobile view for the current site", async () => {
   assert.deepEqual(state.scripts[0].matches, ["*://naver.com/*", "*://*.naver.com/*"]);
   assert.deepEqual(state.icons, {1: "ON", 2: "ON", 3: "OFF"});
   assert.deepEqual(lastToOptions(state, "sites").data, ["naver.com"]);
+  assert.deepEqual(executedBeforeReload, [
+    {target: {tabId: 1, allFrames: true}, hasFunc: true, args: [context.defaults.useragent]},
+    {target: {tabId: 2, allFrames: true}, hasFunc: true, args: [context.defaults.useragent]}
+  ]);
+  assert.deepEqual(state.executedScripts, [
+    {target: {tabId: 1, allFrames: true}, hasFunc: true, args: [context.defaults.useragent]},
+    {target: {tabId: 2, allFrames: true}, hasFunc: true, args: [context.defaults.useragent]}
+  ]);
   assert.deepEqual(state.reloads.pop(), {tabId: 1, bypassCache: true});
-  assert.deepEqual(state.executedScripts, []);
+
+  state.executedScripts.length = 0;
+  executedBeforeReload = null;
 
   chrome.action.onClicked.fire(state.tabs[0]);
   await settle();
@@ -95,7 +127,7 @@ test("adding a second site updates content scripts in place without unregisterin
 
   chrome.action.onClicked.fire(state.tabs[0]);
   await settle();
-  assert.deepEqual(state.scriptingCalls, ["get", "register"]);
+  assert.deepEqual(state.scriptingCalls, ["get", "register", "execute"]);
 
   state.scriptingCalls.length = 0;
   chrome.action.onClicked.fire(state.tabs[1]);
@@ -280,4 +312,121 @@ test("chrome DNR rules set Chrome default user-agent and remove all 11 sec-ch-ua
     assert.equal(rule.action.type, "modifyHeaders");
     assert.deepEqual(rule.action.requestHeaders, expectedHeaders);
   }
+});
+
+test("registerContentScripts and DNR handle IPv6, IPv4, and localhost without wildcard subdomain patterns", async () => {
+  const cases = [
+    {url: "http://[::1]:8080/", site: "[::1]", matches: ["*://[::1]/*"]},
+    {url: "http://[2001:0DB8::1]/", site: "[2001:db8::1]", matches: ["*://[2001:db8::1]/*"]},
+    {url: "http://192.168.0.1/", site: "192.168.0.1", matches: ["*://192.168.0.1/*"]},
+    {url: "http://localhost:3000/", site: "localhost", matches: ["*://localhost/*"]}
+  ];
+  for (const {url, site, matches} of cases) {
+    const {chrome, state} = loadBackground({tabs: [{id: 1, url}]});
+    await settle();
+    chrome.action.onClicked.fire(state.tabs[0]);
+    await settle();
+    assert.deepEqual(state.storage.sites, [site], url);
+    assert.deepEqual(state.scripts[0].matches, matches, url);
+    assert.deepEqual(state.scripts[1].matches, matches, url);
+    assert.deepEqual(state.rules[0].condition.requestDomains, [site], url);
+    assert.deepEqual(state.rules[1].condition.initiatorDomains, [site], url);
+  }
+});
+
+test("shared-hosting root toggle applies to subdomains and disables idempotently from a subdomain tab", async () => {
+  const tabs = [
+    {id: 1, url: "https://tistory.com/"},
+    {id: 2, url: "https://myblog.tistory.com/post"}
+  ];
+  const {chrome, state, context} = loadBackground({tabs});
+  await settle();
+
+  chrome.action.onClicked.fire(state.tabs[0]);
+  await settle();
+  assert.deepEqual(state.storage.sites, ["tistory.com"]);
+  assert.deepEqual(state.icons, {1: "ON", 2: "ON"});
+  assert.equal(context.core.isEnabled("https://myblog.tistory.com/post"), true);
+
+  state.executedScripts.length = 0;
+
+  chrome.action.onClicked.fire(state.tabs[1]);
+  await settle();
+  assert.deepEqual(state.storage.sites, []);
+  assert.deepEqual(state.executedScripts, [
+    {target: {tabId: 1, allFrames: true}, hasFunc: true},
+    {target: {tabId: 2, allFrames: true}, hasFunc: true}
+  ]);
+  assert.deepEqual(state.icons, {1: "OFF", 2: "OFF"});
+  assert.equal(state.rules.length, 0);
+  assert.equal(state.scripts.length, 0);
+  assert.equal(context.core.isEnabled("https://myblog.tistory.com/post"), false);
+});
+
+test("options: multiline user-agent is normalized, applied to rules, and synced to enabled tabs only", async () => {
+  const tabs = [
+    {id: 1, url: "https://m.naver.com/"},
+    {id: 2, url: "https://daum.net/"}
+  ];
+  const {chrome, state} = loadBackground({tabs, storage: {sites: ["naver.com"]}});
+  await settle();
+
+  fromOptions(chrome, "useragent", {useragent: "Mozilla/5.0\r\n(Android 15)\tMobile"});
+  await settle();
+
+  assert.equal(state.storage.useragent, "Mozilla/5.0 (Android 15) Mobile");
+  assert.equal(state.rules[0].action.requestHeaders[0].value, "Mozilla/5.0 (Android 15) Mobile");
+  assert.deepEqual(state.executedScripts, [
+    {target: {tabId: 1, allFrames: true}, hasFunc: true, args: ["Mozilla/5.0 (Android 15) Mobile"]}
+  ]);
+  assert.equal(lastToOptions(state, "settings").data.useragent, "Mozilla/5.0 (Android 15) Mobile");
+});
+
+test("options: non-ASCII or control-char user-agent is rejected without breaking storage, rules, or subsequent toggles", async () => {
+  const tabs = [{id: 1, url: "https://www.daum.net/"}];
+  const {chrome, state} = loadBackground({tabs, storage: {sites: ["naver.com"], useragent: "Valid-UA/1.0"}});
+  chrome.runtime.onInstalled.fire({reason: "install"});
+  await settle();
+
+  for (const invalid of ["Mozilla/5.0 한글", "Bad\x00UA"]) {
+    state.toOptions.length = 0;
+    fromOptions(chrome, "useragent", {useragent: invalid});
+    await settle();
+
+    assert.equal(state.storage.useragent, "Valid-UA/1.0");
+    assert.equal(state.rules[0].action.requestHeaders[0].value, "Valid-UA/1.0");
+    assert.ok(lastToOptions(state, "useragentInvalid"));
+  }
+
+  chrome.action.onClicked.fire(state.tabs[0]);
+  await settle();
+  assert.deepEqual(state.storage.sites, ["naver.com", "daum.net"]);
+  assert.equal(state.rules.length, 3);
+  assert.equal(state.rules[0].action.requestHeaders[0].value, "Valid-UA/1.0");
+  assert.equal(state.icons[1], "ON");
+  assert.deepEqual(state.reloads.pop(), {tabId: 1, bypassCache: true});
+});
+
+test("enabling a site pre-populates tab sessionStorage with custom stored user-agent before reload", async () => {
+  const tabs = [{id: 1, url: "https://m.naver.com/x"}];
+  const {chrome, state} = loadBackground({tabs, storage: {useragent: "Custom-Mobile/2.0"}});
+  await settle();
+
+  let executedBeforeReload = null;
+  const origReload = chrome.tabs.reload;
+  chrome.tabs.reload = (tabId, opts) => {
+    executedBeforeReload = structuredClone(state.executedScripts);
+    origReload(tabId, opts);
+  };
+
+  chrome.action.onClicked.fire(state.tabs[0]);
+  await settle();
+
+  assert.deepEqual(executedBeforeReload, [
+    {target: {tabId: 1, allFrames: true}, hasFunc: true, args: ["Custom-Mobile/2.0"]}
+  ]);
+  assert.deepEqual(state.executedScripts, [
+    {target: {tabId: 1, allFrames: true}, hasFunc: true, args: ["Custom-Mobile/2.0"]}
+  ]);
+  assert.deepEqual(state.reloads, [{tabId: 1, bypassCache: true}]);
 });

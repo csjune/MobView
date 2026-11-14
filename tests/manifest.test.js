@@ -41,7 +41,7 @@ test("content scripts in config.js enable matchOriginAsFallback", () => {
   assert.equal(byId["mobview-script"].matchOriginAsFallback, true);
 });
 
-test("options.html removes the test button and disables textarea autocorrect", () => {
+test("options.html removes the test button, disables textarea autocorrect, and wires validation/live regions", () => {
   const html = fs.readFileSync(path.join(SRC, "data", "options", "options.html"), "utf8");
   assert.equal(/\bid\s*=\s*["']test["']/i.test(html), false);
   const textareaMatch = html.match(/<textarea\b[^>]*\bid\s*=\s*["']useragent["'][^>]*>/i);
@@ -50,6 +50,24 @@ test("options.html removes the test button and disables textarea autocorrect", (
   assert.match(tag, /\bautocorrect\s*=\s*["']off["']/i);
   assert.match(tag, /\bautocapitalize\s*=\s*["']none["']/i);
   assert.match(tag, /\bspellcheck\s*=\s*["']false["']/i);
+  assert.match(tag, /\baria-invalid\s*=\s*["']false["']/i);
+  assert.match(tag, /\bdata-error\s*=\s*["']useragent-error["']/i);
+  assert.equal(/\baria-describedby\b/i.test(tag), false);
+
+  const errorMatch = html.match(/<p\b[^>]*\bid\s*=\s*["']useragent-error["'][^>]*>/i);
+  assert.ok(errorMatch, "expected <p id=\"useragent-error\"> in options.html");
+  assert.match(errorMatch[0], /\bhidden(?:\s*=\s*["'][^"']*["'])?(?=[\s>])/i);
+
+  const announcerMatch = html.match(/<[a-z0-9-]+\b[^>]*\bid\s*=\s*["']status-announcer["'][^>]*>/i);
+  assert.ok(announcerMatch, "expected #status-announcer in options.html");
+  assert.match(announcerMatch[0], /\baria-live\s*=\s*["']polite["']/i);
+});
+
+test("page_context Firefox fallback UA literal matches defaults.useragent", () => {
+  const {context} = loadBackground();
+  const inject = fs.readFileSync(path.join(SRC, "data", "content_script", "page_context", "inject.js"), "utf8");
+  const firefoxMatches = [...inject.matchAll(/(["'])(Mozilla\/5\.0 \([^"'\\]*Firefox\/[^"'\\]*)\1/g)].map((m) => m[2]);
+  assert.deepEqual(firefoxMatches, [context.defaults.useragent]);
 });
 
 test("root LICENSE and src/LICENSE have identical contents", () => {

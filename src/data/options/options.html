@@ -10,7 +10,8 @@
     <div class="logo"></div>
     <main class="content">
       <label class="title" for="useragent">Set a mobile user-agent string in the below area</label>
-      <textarea id="useragent" autocorrect="off" autocapitalize="none" spellcheck="false"></textarea>
+      <textarea id="useragent" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-invalid="false" data-error="useragent-error"></textarea>
+      <p id="useragent-error" class="error" hidden>Error: User-Agent must contain only printable ASCII characters.</p>
       <h2 class="title">Mobile View Sites</h2>
       <ul id="sites" class="sites"></ul>
       <div class="footer">
@@ -19,6 +20,7 @@
           <input id="bypass-cache" type="checkbox">
         </div>
       </div>
+      <div id="status-announcer" class="visually-hidden" aria-live="polite"></div>
     </main>
     <script type="text/javascript" src="options.js"></script>
   </body>

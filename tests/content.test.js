@@ -74,6 +74,40 @@ test("storage script writes a custom user-agent to sessionStorage, purges localS
   assert.deepEqual(events, ["UA2"]);
 });
 
+test("storage script sanitizes non-ASCII, control-char, and multiline UA in chrome.storage.local", async () => {
+  for (const invalid of ["Mozilla/5.0 한글", "Bad\x00UA"]) {
+    const {chrome, context, storageScript} = await registeredScripts({useragent: invalid});
+    const sessionStorage = fakeStorage();
+    const localStorage = fakeStorage();
+    const window = createWindow();
+    const events = [];
+    window.addEventListener("mobview-useragent", (event) => events.push(event.detail), true);
+
+    runContentScript(storageScript, {chrome, sessionStorage, localStorage, window});
+    await settle();
+
+    assert.equal(sessionStorage.items["mobview-useragent"], context.defaults.useragent);
+    assert.deepEqual(events, [context.defaults.useragent]);
+  }
+
+  const {chrome, context, storageScript} = await registeredScripts({useragent: "Mozilla/5.0\r\n(Android 15)\tMobile"});
+  const sessionStorage = fakeStorage();
+  const localStorage = fakeStorage();
+  const window = createWindow();
+  const events = [];
+  window.addEventListener("mobview-useragent", (event) => events.push(event.detail), true);
+
+  runContentScript(storageScript, {chrome, sessionStorage, localStorage, window});
+  await settle();
+
+  const stored = sessionStorage.items["mobview-useragent"];
+  assert.ok(
+    stored === "Mozilla/5.0 (Android 15) Mobile" || stored === context.defaults.useragent,
+    `expected sanitized UA, got ${JSON.stringify(stored)}`
+  );
+  assert.deepEqual(events, [stored]);
+});
+
 test("page script hides CustomEvent from bubble listeners and keeps UA in a private closure", async () => {
   const {chrome, storageScript, pageScript} = await registeredScripts({useragent: "Custom-Mobile-UA"});
   const navigator = desktopNavigator();
@@ -163,13 +197,19 @@ test("page script matches navigator values to an iPhone user-agent", async () =>
   assert.equal(values.maxTouchPoints, 5);
 });
 
-test("page script keeps the real values without a stored user-agent or storage access", async () => {
-  const {pageScript} = await registeredScripts({});
-  const original = navigatorValues(desktopNavigator());
+test("firefox page script uses default UA on cold load and when storage is blocked", async () => {
+  const {context, pageScript} = await registeredScripts({});
   for (const sessionStorage of [fakeStorage(), fakeStorage({}, {blocked: true})]) {
-    const navigator = desktopNavigator();
+    const navigator = desktopNavigator({oscpu: "Windows NT 10.0; Win64; x64"});
     runContentScript(pageScript, {navigator, sessionStorage, window: createWindow()});
-    assert.deepEqual(navigatorValues(navigator), original);
+    assert.deepEqual(navigatorValues(navigator), {
+      userAgent: context.defaults.useragent,
+      appVersion: "5.0 (Android 15)",
+      platform: "Linux armv8l",
+      vendor: "",
+      maxTouchPoints: 5
+    });
+    assert.equal(navigator.oscpu, "Linux armv8l");
   }
 });
 
@@ -369,12 +409,103 @@ test("chrome page script overrides mobviewDefaultUserAgent with custom mobview-u
   });
 });
 
-test("chrome page script sets prototype navigator.userAgentData to undefined", async (t) => {
+test("chrome page script spoofs navigator.userAgentData for default Chrome Android UA without clobbering RegExp.$1", async (t) => {
   const {outputDir} = buildChromeTemp(t);
   const {pageScript, dir} = await registeredScripts({}, outputDir);
-  const navigator = desktopNavigator({userAgentData: {mobile: false}});
-  assert.ok(navigator.userAgentData);
+  const navigator = desktopNavigator({userAgentData: {mobile: false, platform: "Windows"}});
   runContentScript(pageScript, {navigator, sessionStorage: fakeStorage(), window: createWindow(), dir});
-  assert.equal(navigator.userAgentData, undefined);
-  assert.equal(Object.hasOwn(navigator, "userAgentData"), true);
+
+  assert.equal("userAgentData" in navigator, true);
+  assert.equal(Object.hasOwn(navigator, "userAgentData"), false);
+  assert.equal(navigator.userAgentData.mobile, true);
+  assert.equal(navigator.userAgentData.platform, "Android");
+
+  const brands = structuredClone(navigator.userAgentData.brands);
+  assert.ok(Array.isArray(brands));
+  assert.ok(brands.some((entry) => entry.brand === "Chromium" && entry.version === "157"));
+  assert.ok(brands.some((entry) => entry.brand === "Google Chrome" && entry.version === "157"));
+  assert.deepEqual(structuredClone(navigator.userAgentData.toJSON()), {
+    brands,
+    mobile: true,
+    platform: "Android"
+  });
+
+  const high = structuredClone(await navigator.userAgentData.getHighEntropyValues([
+    "architecture", "bitness", "formFactors", "fullVersionList",
+    "model", "platformVersion", "uaFullVersion", "wow64"
+  ]));
+  assert.deepEqual(Object.keys(high).sort(), [
+    "architecture", "bitness", "brands", "formFactors", "fullVersionList",
+    "mobile", "model", "platform", "platformVersion", "uaFullVersion", "wow64"
+  ]);
+  assert.equal(high.architecture, "");
+  assert.equal(high.bitness, "");
+  assert.deepEqual(high.formFactors, ["Mobile"]);
+  assert.equal(high.model, "K");
+  assert.equal(high.platformVersion, "10.0.0");
+  assert.equal(high.uaFullVersion, "157.0.0.0");
+  assert.equal(high.wow64, false);
+  assert.deepEqual(high.brands, brands);
+  assert.equal(high.mobile, true);
+  assert.equal(high.platform, "Android");
+  assert.ok(Array.isArray(high.fullVersionList));
+  assert.equal(high.fullVersionList.length, brands.length);
+  assert.ok(high.fullVersionList.some((entry) => entry.brand === "Chromium" && entry.version === "157.0.0.0"));
+  assert.ok(high.fullVersionList.some((entry) => entry.brand === "Google Chrome" && entry.version === "157.0.0.0"));
+
+  await assert.rejects(() => navigator.userAgentData.getHighEntropyValues("not-array"), {name: "TypeError"});
+  assert.throws(() => Object.getPrototypeOf(navigator).userAgentData, {name: "TypeError"});
+
+  const regExpNav = desktopNavigator({userAgentData: {mobile: false, platform: "Windows"}});
+  const vmContext = runContentScript(pageScript, {
+    navigator: regExpNav,
+    sessionStorage: fakeStorage(),
+    window: createWindow(),
+    dir
+  });
+  const regExpCapture = await vm.runInContext(`
+    (async () => {
+      /keep-(42)/.test("keep-42");
+      const uad = navigator.userAgentData;
+      void [uad.brands, uad.mobile, uad.platform, uad.toJSON()];
+      await uad.getHighEntropyValues([
+        "architecture", "bitness", "formFactors", "fullVersionList",
+        "model", "platformVersion", "uaFullVersion", "wow64"
+      ]);
+      return RegExp.$1;
+    })();
+  `, vmContext);
+  assert.equal(regExpCapture, "42");
+});
+
+test("chrome page script hides navigator.userAgentData for non-Chromium UAs", async (t) => {
+  const {outputDir} = buildChromeTemp(t);
+  const {pageScript, dir} = await registeredScripts({}, outputDir);
+  const {context: fxContext} = loadBackground();
+  const nonChromiumUAs = [IPHONE, IPADOS, fxContext.defaults.useragent];
+
+  for (const ua of nonChromiumUAs) {
+    const protoNav = desktopNavigator({userAgentData: {mobile: false}});
+    runContentScript(pageScript, {
+      navigator: protoNav,
+      sessionStorage: fakeStorage({"mobview-useragent": ua}),
+      window: createWindow(),
+      dir
+    });
+    assert.equal("userAgentData" in protoNav, false, ua);
+    assert.equal(protoNav.userAgentData, undefined, ua);
+    assert.equal("userAgentData" in protoNav && protoNav.userAgentData.mobile, false, ua);
+
+    const ownNav = desktopNavigator();
+    ownNav.userAgentData = {mobile: false};
+    runContentScript(pageScript, {
+      navigator: ownNav,
+      sessionStorage: fakeStorage({"mobview-useragent": ua}),
+      window: createWindow(),
+      dir
+    });
+    assert.equal("userAgentData" in ownNav, false, ua);
+    assert.equal(ownNav.userAgentData, undefined, ua);
+    assert.equal("userAgentData" in ownNav && ownNav.userAgentData.mobile, false, ua);
+  }
 });

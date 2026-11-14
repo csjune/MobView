@@ -10,6 +10,57 @@ function read(file, dir = SRC) {
   return fs.readFileSync(path.join(dir, file), "utf8");
 }
 
+function validateMatchPatterns(matches) {
+  if (!Array.isArray(matches) || matches.length === 0) {
+    throw new Error("Invalid match patterns");
+  }
+  for (const pattern of matches) {
+    const m = /^(\*|https?):\/\/([^/]+)\/.*$/.exec(pattern);
+    if (!m) throw new Error(`Invalid match pattern: ${pattern}`);
+    const host = m[2];
+    if (host.startsWith("*.")) {
+      const sub = host.slice(2);
+      if (
+        !sub ||
+        sub.endsWith(".") ||
+        sub.startsWith("[") ||
+        /^\d{1,3}(\.\d{1,3}){3}$/.test(sub) ||
+        sub.includes("..")
+      ) {
+        throw new Error(`Invalid match pattern: ${pattern}`);
+      }
+    } else if (host !== "*") {
+      if (host.endsWith(".") || host.includes("..")) {
+        throw new Error(`Invalid match pattern: ${pattern}`);
+      }
+      if (host.startsWith("[")) {
+        try {
+          if (new URL("http://" + host).hostname !== host) {
+            throw new Error("Invalid IPv6 host");
+          }
+        } catch {
+          throw new Error(`Invalid match pattern: ${pattern}`);
+        }
+      }
+    }
+  }
+}
+
+function validateDomainCondition(domain) {
+  if (typeof domain !== "string" || domain.length === 0 || domain !== domain.toLowerCase() || domain.endsWith(".")) {
+    throw new Error("Invalid domain condition");
+  }
+  if (domain.startsWith("[")) {
+    try {
+      if (new URL("http://" + domain).hostname !== domain) {
+        throw new Error("Invalid IPv6 domain");
+      }
+    } catch {
+      throw new Error("Invalid domain condition");
+    }
+  }
+}
+
 function event() {
   const listeners = [];
   return {
@@ -113,6 +164,7 @@ function createChrome({tabs = [], storage = {}} = {}) {
         state.scriptingCalls.push("register");
         const existing = new Set(state.scripts.map((script) => script.id));
         for (const script of scripts) {
+          validateMatchPatterns(script.matches);
           if (existing.has(script.id)) throw new Error(`Duplicate script ID '${script.id}'`);
           existing.add(script.id);
         }
@@ -121,6 +173,7 @@ function createChrome({tabs = [], storage = {}} = {}) {
       async updateContentScripts(scripts) {
         state.scriptingCalls.push("update");
         for (const script of scripts) {
+          validateMatchPatterns(script.matches);
           if (!state.scripts.some((existing) => existing.id === script.id)) {
             throw new Error(`Nonexistent script ID '${script.id}'`);
           }
@@ -140,10 +193,14 @@ function createChrome({tabs = [], storage = {}} = {}) {
       },
       async executeScript(injection) {
         state.scriptingCalls.push("execute");
-        state.executedScripts.push({
+        const entry = {
           target: structuredClone(injection.target),
           hasFunc: typeof injection.func === "function"
-        });
+        };
+        if (injection.args !== undefined) {
+          entry.args = structuredClone(injection.args);
+        }
+        state.executedScripts.push(entry);
         if (typeof injection.func === "function") {
           try {
             return [{result: injection.func(...(injection.args || []))}];
@@ -157,6 +214,31 @@ function createChrome({tabs = [], storage = {}} = {}) {
     declarativeNetRequest: {
       async getDynamicRules() {return state.rules},
       async updateDynamicRules({removeRuleIds = [], addRules = []} = {}) {
+        for (const rule of addRules) {
+          if (rule && rule.action && rule.action.type === "modifyHeaders" && Array.isArray(rule.action.requestHeaders)) {
+            for (const h of rule.action.requestHeaders) {
+              if (h && h.operation === "set") {
+                if (
+                  typeof h.value !== "string" ||
+                  h.value.length === 0 ||
+                  /[^\x20-\x7E]/.test(h.value) ||
+                  h.value !== h.value.trim()
+                ) {
+                  throw new Error("Invalid header value");
+                }
+              }
+            }
+          }
+          if (rule && rule.condition) {
+            for (const field of ["requestDomains", "initiatorDomains"]) {
+              if (Array.isArray(rule.condition[field])) {
+                for (const d of rule.condition[field]) {
+                  validateDomainCondition(d);
+                }
+              }
+            }
+          }
+        }
         const rules = state.rules.filter((rule) => !removeRuleIds.includes(rule.id)).concat(structuredClone(addRules));
         const ids = rules.map((rule) => rule.id);
         if (new Set(ids).size !== ids.length) throw new Error("duplicate rule ids");

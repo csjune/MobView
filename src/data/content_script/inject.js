@@ -25,11 +25,22 @@
     return null;
   };
   /*  */
+  const isExactHost = function (host) {
+    return host.startsWith("[") || host.indexOf(".") === -1 || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+  };
+  /*  */
   const matchesSite = function (hostname, sites) {
     if (!sites) return true;
-    if (!hostname) return false;
+    const host = typeof hostname === "string" ? hostname.trim().toLowerCase().replace(/\.+$/, "") : "";
+    if (!host) return false;
     return sites.some(function (site) {
-      return hostname === site || hostname.endsWith("." + site);
+      if (typeof site !== "string") return false;
+      const normalizedSite = site.trim().toLowerCase().replace(/\.+$/, "");
+      if (!normalizedSite) return false;
+      if (isExactHost(host) || isExactHost(normalizedSite)) {
+        return host === normalizedSite;
+      }
+      return host === normalizedSite || host.endsWith("." + normalizedSite);
     });
   };
   /*  */
@@ -57,7 +68,8 @@
       return;
     }
     /*  */
-    const ua = (e && e.useragent) || defaults.useragent;
+    const rawUA = e && typeof e.useragent === "string" ? e.useragent.replace(/[\r\n\t]+/g, " ").trim() : "";
+    const ua = rawUA && !/[^\x20-\x7E]/.test(rawUA) ? rawUA : defaults.useragent;
     try {
       if (typeof sessionStorage !== "undefined" && sessionStorage) sessionStorage.setItem("mobview-useragent", ua);
     } catch (err) {}
