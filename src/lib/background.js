@@ -51,28 +51,41 @@ var core = {
     core.queue = core.queue.then(task).catch(function (e) {console.error(e)});
     return core.queue;
   },
-  "load": function (restoreScripts) {
-    core.serial(restoreScripts ? core.apply : core.register.netrequest);
-    app.contextmenu.create({
-      "contexts": ["action"],
-      "id": "mobview",
-      "title": "What is my UserAgent?"
-    });
+  "load": function () {
+    core.serial(core.apply);
   },
   "register": {
     "scripts": async function () {
-      await app.contentscripts.unregister();
+      const existing = await app.contentscripts.get();
+      const existingIds = new Set(existing.map(function (script) {return script.id}));
       /*  */
       const sites = config.sites;
-      if (!sites.length) return;
+      if (!sites.length) {
+        if (existingIds.size) await app.contentscripts.unregister(Array.from(existingIds));
+        return;
+      }
       /*  */
       const matches = [];
       sites.forEach(function (site) {
         matches.push("*://" + site + "/*", "*://*." + site + "/*");
       });
-      await app.contentscripts.register(config.scripts.map(function (script) {
+      const desired = config.scripts.map(function (script) {
         return Object.assign({}, script, {"matches": matches});
-      }));
+      });
+      /*  */
+      const toUpdate = [];
+      const toRegister = [];
+      desired.forEach(function (script) {
+        if (existingIds.delete(script.id)) {
+          toUpdate.push(script);
+        } else {
+          toRegister.push(script);
+        }
+      });
+      /*  */
+      if (existingIds.size) await app.contentscripts.unregister(Array.from(existingIds));
+      if (toUpdate.length) await app.contentscripts.update(toUpdate);
+      if (toRegister.length) await app.contentscripts.register(toRegister);
     },
     "netrequest": async function () {
       const sites = config.sites;
@@ -97,23 +110,29 @@ var core = {
       /*  */
       await app.netrequest.replace([
         {
-          /* documents (main_frame, sub_frame) of the sites */
+          /* top-level documents of the sites */
           "action": action,
           "condition": {
             "requestDomains": sites,
-            "resourceTypes": ["main_frame", "sub_frame"]
+            "resourceTypes": ["main_frame"]
           }
         },
         {
-          /* subresources initiated by the sites' pages (sub_frame excluded so that
-             third-party iframes stay desktop, matching their JS userAgent) */
+          /* sub_frames of the sites only when initiated by an enabled site, so an enabled
+             site embedded in a desktop page stays desktop, matching its JS userAgent */
+          "action": action,
+          "condition": {
+            "requestDomains": sites,
+            "initiatorDomains": sites,
+            "resourceTypes": ["sub_frame"]
+          }
+        },
+        {
+          /* subresources initiated by the sites' pages (frame types excluded) */
           "action": action,
           "condition": {
             "initiatorDomains": sites,
-            "resourceTypes": [
-              "ping", "other", "websocket", "csp_report", "xmlhttprequest",
-              "script", "image", "stylesheet", "font", "media", "object"
-            ]
+            "excludedResourceTypes": ["main_frame", "sub_frame"]
           }
         }
       ]);
@@ -126,10 +145,19 @@ var core = {
     core.action.tabs.refreshAll();
     app.options.send("sites", config.sites);
   },
+  "clearSiteStorage": function (site) {
+    return new Promise(function (resolve) {
+      app.tab.all(function (tabs) {
+        const clears = tabs.filter(function (tab) {
+          return tab && tab.id !== undefined && core.getSite(tab.url) === site;
+        }).map(function (tab) {
+          return app.contentscripts.clearTabStorage(tab.id);
+        });
+        Promise.all(clears).then(resolve, resolve);
+      });
+    });
+  },
   "action": {
-    "test": function () {
-      app.tab.open(config.testPage);
-    },
     "options": {
       "load": function () {
         app.options.send("settings", {
@@ -153,6 +181,7 @@ var core = {
           if (!e || config.sites.indexOf(e.site) === -1) return;
           config.sites = config.sites.filter(function (site) {return site !== e.site});
           await core.apply();
+          await core.clearSiteStorage(e.site);
         });
       }
     },
@@ -184,8 +213,10 @@ var core = {
         if (!site) return;
         /*  */
         const sites = config.sites;
-        config.sites = sites.indexOf(site) === -1 ? sites.concat(site) : sites.filter(function (e) {return e !== site});
+        const enabling = sites.indexOf(site) === -1;
+        config.sites = enabling ? sites.concat(site) : sites.filter(function (e) {return e !== site});
         await core.apply();
+        if (!enabling) await core.clearSiteStorage(site);
         app.tab.reload(tab.id, config.bypassCache);
       });
     }
@@ -196,20 +227,9 @@ app.options.receive("load", core.action.options.load);
 app.options.receive("bypassCache", core.action.options.bypassCache);
 app.options.receive("useragent", core.action.options.useragent);
 app.options.receive("removeSite", core.action.options.removeSite);
-app.options.receive("test", core.action.test);
 
 app.on.button(core.action.button);
-app.on.contextmenu(core.action.test);
 app.on.tabs.activated(core.action.tabs.activated);
 app.on.tabs.updated(core.action.tabs.updated);
 app.on.startup(core.load);
-app.on.installed(function () {
-  core.load(app.backgroundWorker);
-});
-
-/* Firefox's event page restores its scripts on wake-up. Chrome keeps them registered. */
-if (!app.backgroundWorker) {
-  app.storage.load(function () {
-    core.serial(core.register.scripts);
-  });
-}
+app.on.installed(core.load);

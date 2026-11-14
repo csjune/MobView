@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const {loadBackground} = require("./harness");
 const {buildChrome, resolveChromeVersion} = require("../scripts/build-chrome");
 
 const ROOT = path.join(__dirname, "..");
@@ -27,6 +28,28 @@ function sharedExtensionFiles(dir, targetManifest) {
 
 test("package.json and manifest.json versions match", () => {
   assert.equal(pkg.version, manifest.version);
+});
+
+test("manifest.json omits contextMenus permission", () => {
+  assert.equal(manifest.permissions.includes("contextMenus"), false);
+});
+
+test("content scripts in config.js enable matchOriginAsFallback", () => {
+  const {context} = loadBackground();
+  const byId = Object.fromEntries(context.config.scripts.map((script) => [script.id, script]));
+  assert.equal(byId["mobview-storage"].matchOriginAsFallback, true);
+  assert.equal(byId["mobview-script"].matchOriginAsFallback, true);
+});
+
+test("options.html removes the test button and disables textarea autocorrect", () => {
+  const html = fs.readFileSync(path.join(SRC, "data", "options", "options.html"), "utf8");
+  assert.equal(/\bid\s*=\s*["']test["']/i.test(html), false);
+  const textareaMatch = html.match(/<textarea\b[^>]*\bid\s*=\s*["']useragent["'][^>]*>/i);
+  assert.ok(textareaMatch, "expected <textarea id=\"useragent\"> in options.html");
+  const tag = textareaMatch[0];
+  assert.match(tag, /\bautocorrect\s*=\s*["']off["']/i);
+  assert.match(tag, /\bautocapitalize\s*=\s*["']none["']/i);
+  assert.match(tag, /\bspellcheck\s*=\s*["']false["']/i);
 });
 
 test("root LICENSE and src/LICENSE have identical contents", () => {
@@ -91,6 +114,7 @@ test("buildChrome produces a valid Chrome output and cleans stale Chrome zips", 
   assert.equal(chromeManifest.manifest_version, 3);
   assert.equal(chromeManifest.minimum_chrome_version, "119");
   assert.equal("browser_specific_settings" in chromeManifest, false);
+  assert.equal(chromeManifest.permissions.includes("contextMenus"), false);
   assert.ok(
     chromeManifest.version === pkg.version || chromeManifest.version.startsWith(`${pkg.version}.`),
     `expected Chrome version ${chromeManifest.version} to start with ${pkg.version}`

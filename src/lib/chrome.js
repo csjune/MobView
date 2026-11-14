@@ -13,23 +13,30 @@ app.storage = {
   },
   "write": function (id, data) {
     app.storage.local[id] = data;
-    chrome.storage.local.set({[id]: data});
+    chrome.storage.local.set({[id]: data}, app.error);
   },
   "remove": function (id) {
     delete app.storage.local[id];
-    chrome.storage.local.remove(id);
+    chrome.storage.local.remove(id, app.error);
   },
   /* the background is the only writer, so the in-memory copy is read from disk once per wake-up */
   "load": function (callback) {
     if (!app.storage.ready) {
-      app.storage.ready = new Promise(function (resolve) {
+      app.storage.ready = new Promise(function (resolve, reject) {
         chrome.storage.local.get(null, function (e) {
+          if (chrome.runtime.lastError) {
+            app.storage.ready = null;
+            reject(new Error(chrome.runtime.lastError.message || "Failed to load storage"));
+            return;
+          }
           app.storage.local = e || {};
           resolve();
         });
       });
     }
-    return app.storage.ready.then(callback);
+    return app.storage.ready.then(callback, function (e) {
+      console.error(e);
+    });
   },
   "ready": null
 };
@@ -53,9 +60,6 @@ app.on = {
   },
   "button": function (callback) {
     chrome.action.onClicked.addListener(app.loaded(callback));
-  },
-  "contextmenu": function (callback) {
-    chrome.contextMenus.onClicked.addListener(app.loaded(callback));
   },
   "tabs": {
     "activated": function (callback) {
@@ -96,21 +100,27 @@ app.button = {
   }
 };
 
-app.contextmenu = {
-  /* menus survive restarts, so start from a clean slate instead of tripping over duplicate ids */
-  "create": function (options) {
-    chrome.contextMenus.removeAll(function () {
-      chrome.contextMenus.create(options, app.error);
-    });
-  }
-};
-
 app.contentscripts = {
+  "get": function () {
+    return chrome.scripting.getRegisteredContentScripts();
+  },
   "register": function (scripts) {
     return chrome.scripting.registerContentScripts(scripts);
   },
-  "unregister": function () {
-    return chrome.scripting.unregisterContentScripts();
+  "update": function (scripts) {
+    return chrome.scripting.updateContentScripts(scripts);
+  },
+  "unregister": function (ids) {
+    return ids ? chrome.scripting.unregisterContentScripts({"ids": ids}) : chrome.scripting.unregisterContentScripts();
+  },
+  "clearTabStorage": function (tabId) {
+    return chrome.scripting.executeScript({
+      "target": {"tabId": tabId, "allFrames": true},
+      "func": function () {
+        try {sessionStorage.removeItem("mobview-useragent")} catch (e) {}
+        try {localStorage.removeItem("mobview-useragent")} catch (e) {}
+      }
+    }).catch(function () {});
   }
 };
 
@@ -135,11 +145,8 @@ app.tab = {
   },
   "all": function (callback) {
     chrome.tabs.query({}, function (tabs) {
-      if (!chrome.runtime.lastError && tabs) callback(tabs);
+      callback(!chrome.runtime.lastError && tabs ? tabs : []);
     });
-  },
-  "open": function (url) {
-    chrome.tabs.create({"url": url, "active": true});
   },
   "reload": function (tabId, bypassCache) {
     chrome.tabs.reload(tabId, {"bypassCache": !!bypassCache}, app.error);

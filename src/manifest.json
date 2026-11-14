@@ -13,7 +13,6 @@
   "permissions": [
     "storage",
     "scripting",
-    "contextMenus",
     "declarativeNetRequest"
   ],
   "browser_specific_settings": {

@@ -1,5 +1,4 @@
 var config = {
-  "testPage": "https://webbrowsertools.com/useragent/?verbose=false&delay=true&method=ug",
   /* base domains with mobile view turned on */
   get sites () {return app.storage.read("sites") !== undefined ? app.storage.read("sites") : []},
   set sites (val) {app.storage.write("sites", val)},
@@ -16,6 +15,7 @@ var config = {
       "id": "mobview-storage",
       "allFrames": true,
       "runAt": "document_start",
+      "matchOriginAsFallback": true,
       "js": ["lib/defaults.js", "data/content_script/inject.js"]
     },
     {

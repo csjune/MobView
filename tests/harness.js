@@ -24,11 +24,12 @@ function createChrome({tabs = [], storage = {}} = {}) {
     storage: {...storage},
     rules: [],
     scripts: [],
+    scriptingCalls: [],
+    executedScripts: [],
     icons: {},
-    menus: [],
-    opened: [],
     reloads: [],
-    toOptions: []
+    toOptions: [],
+    storageGetError: null
   };
   const chrome = {
     runtime: {
@@ -51,28 +52,107 @@ function createChrome({tabs = [], storage = {}} = {}) {
     storage: {
       local: {
         get(keys, callback) {
-          const copy = structuredClone(state.storage);
-          setTimeout(() => callback(keys === null ? copy : (keys in copy ? {[keys]: copy[keys]} : {})));
+          if (typeof keys === "function") {
+            callback = keys;
+            keys = null;
+          }
+          setTimeout(() => {
+            if (state.storageGetError) {
+              chrome.runtime.lastError = state.storageGetError;
+              callback(undefined);
+              chrome.runtime.lastError = null;
+              return;
+            }
+            const copy = structuredClone(state.storage);
+            let result;
+            if (keys === null || keys === undefined) {
+              result = copy;
+            } else if (Array.isArray(keys)) {
+              result = {};
+              for (const key of keys) {
+                if (Object.hasOwn(copy, key)) result[key] = copy[key];
+              }
+            } else if (typeof keys === "string") {
+              result = Object.hasOwn(copy, keys) ? {[keys]: copy[keys]} : {};
+            } else if (typeof keys === "object") {
+              result = {};
+              for (const [key, fallback] of Object.entries(keys)) {
+                result[key] = Object.hasOwn(copy, key) ? copy[key] : fallback;
+              }
+            } else {
+              result = {};
+            }
+            callback(result);
+          });
         },
-        set(items) {Object.assign(state.storage, structuredClone(items))},
-        remove(key) {delete state.storage[key]}
+        set(items, callback) {
+          Object.assign(state.storage, structuredClone(items));
+          if (typeof callback === "function") setTimeout(callback);
+        },
+        remove(keys, callback) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) {
+            delete state.storage[key];
+          }
+          if (typeof callback === "function") setTimeout(callback);
+        }
       }
     },
     action: {
       onClicked: event(),
       setIcon({tabId, path}) {state.icons[tabId] = path[16].split("/")[3]}
     },
-    contextMenus: {
-      onClicked: event(),
-      removeAll(callback) {state.menus = []; callback()},
-      create(options) {
-        if (state.menus.some((menu) => menu.id === options.id)) throw new Error("duplicate menu id");
-        state.menus.push(options);
-      }
-    },
     scripting: {
-      async registerContentScripts(scripts) {state.scripts = structuredClone(scripts)},
-      async unregisterContentScripts() {state.scripts = []}
+      async getRegisteredContentScripts(filter) {
+        state.scriptingCalls.push("get");
+        if (filter && Array.isArray(filter.ids)) {
+          return structuredClone(state.scripts.filter((script) => filter.ids.includes(script.id)));
+        }
+        return structuredClone(state.scripts);
+      },
+      async registerContentScripts(scripts) {
+        state.scriptingCalls.push("register");
+        const existing = new Set(state.scripts.map((script) => script.id));
+        for (const script of scripts) {
+          if (existing.has(script.id)) throw new Error(`Duplicate script ID '${script.id}'`);
+          existing.add(script.id);
+        }
+        state.scripts.push(...structuredClone(scripts));
+      },
+      async updateContentScripts(scripts) {
+        state.scriptingCalls.push("update");
+        for (const script of scripts) {
+          if (!state.scripts.some((existing) => existing.id === script.id)) {
+            throw new Error(`Nonexistent script ID '${script.id}'`);
+          }
+        }
+        for (const script of structuredClone(scripts)) {
+          const index = state.scripts.findIndex((existing) => existing.id === script.id);
+          state.scripts[index] = script;
+        }
+      },
+      async unregisterContentScripts(filter) {
+        state.scriptingCalls.push("unregister");
+        if (filter && Array.isArray(filter.ids)) {
+          state.scripts = state.scripts.filter((script) => !filter.ids.includes(script.id));
+        } else {
+          state.scripts = [];
+        }
+      },
+      async executeScript(injection) {
+        state.scriptingCalls.push("execute");
+        state.executedScripts.push({
+          target: structuredClone(injection.target),
+          hasFunc: typeof injection.func === "function"
+        });
+        if (typeof injection.func === "function") {
+          try {
+            return [{result: injection.func(...(injection.args || []))}];
+          } catch {
+            return [];
+          }
+        }
+        return [];
+      }
     },
     declarativeNetRequest: {
       async getDynamicRules() {return state.rules},
@@ -86,9 +166,8 @@ function createChrome({tabs = [], storage = {}} = {}) {
     tabs: {
       onActivated: event(),
       onUpdated: event(),
-      query(query, callback) {callback(query.active ? state.tabs.slice(0, 1) : state.tabs)},
+      query(query, callback) {callback(query && query.active ? state.tabs.slice(0, 1) : state.tabs)},
       get(tabId, callback) {callback(state.tabs.find((tab) => tab.id === tabId))},
-      create({url}) {state.opened.push(url)},
       reload(tabId, {bypassCache}) {state.reloads.push({tabId, bypassCache})}
     }
   };
@@ -119,12 +198,120 @@ function loadBackground({tabs = [], storage = {}, dir = SRC, worker = false} = {
   return {chrome, state, context};
 }
 
+function createWindow({
+  isSubframe = false,
+  sameOriginTop = true,
+  topHostname = null,
+  ancestorOrigins = null,
+  referrer = "",
+  hostname = "naver.com"
+} = {}) {
+  const location = {
+    hostname,
+    href: "https://" + hostname + "/"
+  };
+  if (Array.isArray(ancestorOrigins)) {
+    location.ancestorOrigins = [...ancestorOrigins];
+  }
+  const document = {referrer};
+
+  class CustomEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.detail = init.detail;
+      this._stopped = false;
+    }
+    stopImmediatePropagation() {
+      this._stopped = true;
+    }
+    stopPropagation() {}
+  }
+
+  const listeners = {capture: new Map(), bubble: new Map()};
+  const normalizeCapture = (options) => (typeof options === "boolean" ? options : Boolean(options && options.capture));
+  const bucket = (type, options) => {
+    const map = normalizeCapture(options) ? listeners.capture : listeners.bubble;
+    if (!map.has(type)) map.set(type, []);
+    return map.get(type);
+  };
+
+  const win = {
+    location,
+    document,
+    CustomEvent,
+    addEventListener(type, handler, capture = false) {
+      if (typeof handler !== "function") return;
+      const list = bucket(type, capture);
+      if (!list.some((entry) => entry.handler === handler)) {
+        list.push({handler, once: Boolean(capture && typeof capture === "object" && capture.once)});
+      }
+    },
+    removeEventListener(type, handler, capture = false) {
+      const list = bucket(type, capture);
+      const index = list.findIndex((entry) => entry.handler === handler);
+      if (index !== -1) list.splice(index, 1);
+    },
+    dispatchEvent(event) {
+      for (const phase of [listeners.capture, listeners.bubble]) {
+        const list = phase.get(event.type);
+        if (!list) continue;
+        for (const entry of [...list]) {
+          if (event._stopped) break;
+          if (entry.once) {
+            const index = list.indexOf(entry);
+            if (index !== -1) list.splice(index, 1);
+          }
+          entry.handler.call(win, event);
+        }
+        if (event._stopped) break;
+      }
+      return true;
+    }
+  };
+  win.window = win;
+  win.self = win;
+
+  if (!isSubframe) {
+    win.top = win;
+    win.parent = win;
+  } else {
+    let top;
+    if (sameOriginTop) {
+      const resolvedTop = topHostname || hostname;
+      top = {
+        location: {
+          hostname: resolvedTop,
+          href: "https://" + resolvedTop + "/"
+        }
+      };
+    } else {
+      top = {
+        location: {
+          get hostname() {throw new Error("SecurityError")},
+          get href() {throw new Error("SecurityError")}
+        }
+      };
+    }
+    win.top = top;
+    win.parent = top;
+  }
+
+  return win;
+}
+
 /* runs a registered content script entry against a fake page */
-function runContentScript(script, {chrome, navigator = {}, localStorage, dir = SRC}) {
+function runContentScript(script, {chrome, navigator = {}, sessionStorage, localStorage, window, location, document, dir = SRC}) {
   const context = vm.createContext({
     chrome: script.world === "MAIN" ? undefined : chrome,
     navigator,
-    localStorage
+    sessionStorage,
+    localStorage,
+    window,
+    location: location || (window && window.location),
+    document: document || (window && window.document),
+    CustomEvent: (window && window.CustomEvent) || undefined,
+    URL,
+    TypeError
   });
   for (const file of script.js) {
     vm.runInContext(read(file, dir), context, {filename: file});
@@ -132,17 +319,28 @@ function runContentScript(script, {chrome, navigator = {}, localStorage, dir = S
   return context;
 }
 
-function fakeLocalStorage(initial = {}, {blocked = false} = {}) {
+function fakeStorage(initial = {}, {blocked = false} = {}) {
   const items = {...initial};
+  const check = () => {
+    if (blocked) throw new Error("SecurityError");
+  };
   return {
     items,
     getItem(key) {
-      if (blocked) throw new Error("SecurityError");
-      return key in items ? items[key] : null;
+      check();
+      return Object.hasOwn(items, key) ? items[key] : null;
     },
     setItem(key, value) {
-      if (blocked) throw new Error("SecurityError");
+      check();
       items[key] = String(value);
+    },
+    removeItem(key) {
+      check();
+      delete items[key];
+    },
+    clear() {
+      check();
+      for (const key of Object.keys(items)) delete items[key];
     }
   };
 }
@@ -152,4 +350,13 @@ function settle(ms = 20) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = {SRC, loadBackground, runContentScript, fakeLocalStorage, settle, read};
+module.exports = {
+  SRC,
+  loadBackground,
+  runContentScript,
+  fakeStorage,
+  fakeLocalStorage: fakeStorage,
+  createWindow,
+  settle,
+  read
+};

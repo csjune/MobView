@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const vm = require("node:vm");
 const {loadBackground, read, settle} = require("./harness");
 
-function createElement(tagName, id = "") {
+function createElement(tagName, id = "", ownerDocument = null) {
   const children = [];
   const attributes = {};
   const listeners = {};
@@ -64,46 +64,89 @@ function createElement(tagName, id = "") {
       for (const handler of listeners.change || []) {
         handler({type: "change", target: element, currentTarget: element, preventDefault() {}});
       }
+    },
+    input() {
+      for (const handler of listeners.input || []) {
+        handler({type: "input", target: element, currentTarget: element, preventDefault() {}});
+      }
+    },
+    focus() {
+      if (ownerDocument) ownerDocument.activeElement = element;
+      for (const handler of listeners.focus || []) {
+        handler({type: "focus", target: element, currentTarget: element, preventDefault() {}});
+      }
+    },
+    blur() {
+      if (ownerDocument && ownerDocument.activeElement === element) {
+        ownerDocument.activeElement = null;
+      }
+      for (const handler of listeners.blur || []) {
+        handler({type: "blur", target: element, currentTarget: element, preventDefault() {}});
+      }
     }
   };
   return element;
 }
 
 function createDocument() {
-  const elements = {
-    useragent: createElement("textarea", "useragent"),
-    sites: createElement("ul", "sites"),
-    "bypass-cache": createElement("input", "bypass-cache"),
-    test: createElement("button", "test")
-  };
-  elements["bypass-cache"].type = "checkbox";
-  elements.test.type = "button";
   const docListeners = {};
-
-  return {
-    elements,
+  const doc = {
+    activeElement: null,
+    visibilityState: "visible",
+    elements: null,
     _listeners: docListeners,
     createElement(tagName) {
-      return createElement(tagName);
+      return createElement(tagName, "", doc);
     },
     getElementById(id) {
-      return Object.hasOwn(elements, id) ? elements[id] : null;
+      return Object.hasOwn(doc.elements, id) ? doc.elements[id] : null;
     },
     addEventListener(eventName, handler) {
       if (!docListeners[eventName]) docListeners[eventName] = [];
       docListeners[eventName].push(handler);
+    },
+    dispatch(eventName) {
+      for (const handler of docListeners[eventName] || []) {
+        handler({type: eventName, target: doc, currentTarget: doc, preventDefault() {}});
+      }
     }
   };
+
+  doc.elements = {
+    useragent: createElement("textarea", "useragent", doc),
+    sites: createElement("ul", "sites", doc),
+    "bypass-cache": createElement("input", "bypass-cache", doc)
+  };
+  doc.elements["bypass-cache"].type = "checkbox";
+  return doc;
+}
+
+function createOptionsWindow() {
+  const winListeners = {};
+  const win = {
+    _listeners: winListeners,
+    addEventListener(eventName, handler) {
+      if (!winListeners[eventName]) winListeners[eventName] = [];
+      winListeners[eventName].push(handler);
+    },
+    dispatch(eventName) {
+      for (const handler of winListeners[eventName] || []) {
+        handler({type: eventName, target: win, currentTarget: win, preventDefault() {}});
+      }
+    }
+  };
+  return win;
 }
 
 async function loadOptions(backgroundOptions) {
   const {chrome, state, context} = loadBackground(backgroundOptions);
   const document = createDocument();
-  const optionsContext = vm.createContext({chrome, document, console, setTimeout, clearTimeout});
+  const window = createOptionsWindow();
+  const optionsContext = vm.createContext({chrome, document, window, console, setTimeout, clearTimeout});
   vm.runInContext(read("data/options/options.js"), optionsContext, {filename: "data/options/options.js"});
-  for (const handler of document._listeners.DOMContentLoaded || []) handler();
+  document.dispatch("DOMContentLoaded");
   await settle();
-  return {chrome, state, context, document, optionsContext};
+  return {chrome, state, context, document, window, optionsContext};
 }
 
 test("initial load populates bypass-cache, useragent, and empty sites message", async () => {
@@ -190,9 +233,67 @@ test("changing #bypass-cache and #useragent updates storage, rules, and resets w
   assert.equal(useragentEl.value, context.defaults.useragent);
 });
 
-test("clicking #test opens config.testPage", async () => {
-  const {state, context, document} = await loadOptions({});
-  document.getElementById("test").click();
+test("focused typing in #useragent debounces save and preserves value while focused", async () => {
+  const {state, document} = await loadOptions({storage: {sites: ["naver.com"]}});
+  const useragentEl = document.getElementById("useragent");
+
+  useragentEl.focus();
+  useragentEl.value = "Mobile-UA ";
+  useragentEl.input();
+  await settle(350);
+
+  assert.equal(state.storage.useragent, "Mobile-UA");
+  assert.equal(state.rules[0].action.requestHeaders[0].value, "Mobile-UA");
+  assert.equal(useragentEl.value, "Mobile-UA ");
+});
+
+test("switching away from options tab via visibilitychange immediately flushes unsaved input", async () => {
+  const {state, document} = await loadOptions({storage: {sites: ["naver.com"]}});
+  const useragentEl = document.getElementById("useragent");
+
+  useragentEl.focus();
+  useragentEl.value = "Flushed-On-Hide";
+  useragentEl.input();
+
+  document.visibilityState = "hidden";
+  document.dispatch("visibilitychange");
   await settle();
-  assert.deepEqual(state.opened, [context.config.testPage]);
+
+  assert.equal(state.storage.useragent, "Flushed-On-Hide");
+  assert.equal(state.rules[0].action.requestHeaders[0].value, "Flushed-On-Hide");
+});
+
+test("closing options tab via pagehide immediately flushes unsaved input", async () => {
+  const {state, document, window} = await loadOptions({storage: {sites: ["naver.com"]}});
+  const useragentEl = document.getElementById("useragent");
+
+  useragentEl.focus();
+  useragentEl.value = "Flushed-On-Pagehide";
+  useragentEl.input();
+
+  window.dispatch("pagehide");
+  await settle();
+
+  assert.equal(state.storage.useragent, "Flushed-On-Pagehide");
+  assert.equal(state.rules[0].action.requestHeaders[0].value, "Flushed-On-Pagehide");
+});
+
+test("clearing #useragent during focused input keeps value before commit and resets on blur", async () => {
+  const {state, context, document} = await loadOptions({
+    storage: {sites: ["naver.com"], useragent: "Custom-UA"}
+  });
+  const useragentEl = document.getElementById("useragent");
+
+  useragentEl.focus();
+  useragentEl.value = "   ";
+  useragentEl.input();
+  await settle(350);
+  assert.equal(useragentEl.value, "   ");
+  assert.equal(state.storage.useragent, "Custom-UA");
+
+  useragentEl.blur();
+  await settle();
+  assert.equal("useragent" in state.storage, false);
+  assert.equal(state.rules[0].action.requestHeaders[0].value, context.defaults.useragent);
+  assert.equal(useragentEl.value, context.defaults.useragent);
 });

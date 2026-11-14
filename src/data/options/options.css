@@ -63,23 +63,6 @@ body {
   vertical-align: middle;
 }
 
-.content .button {
-  width: 240px;
-  color: #333;
-  height: 42px;
-  padding: 0 10px;
-  cursor: pointer;
-  font-size: 13px;
-  font-family: inherit;
-  transition: 300ms ease all;
-  background-color: transparent;
-  border: solid 1px rgba(0,0,0,0.25);
-}
-
-.content .button:hover {
-  background-color: rgba(0,0,0,0.05);
-}
-
 .content .sites {
   margin: 0;
   padding: 0;
@@ -111,7 +94,6 @@ body {
 }
 
 .content textarea:focus-visible,
-.content .button:focus-visible,
 .content .sites button:focus-visible,
 .content input[type="checkbox"]:focus-visible {
   outline: 2px solid #0060df;
@@ -132,7 +114,6 @@ body {
     background-color: #1e1e1e;
   }
   .content label,
-  .content .button,
   .content .sites li {
     color: #ebebeb;
   }
@@ -144,12 +125,6 @@ body {
   .content .title {
     background-color: #333333;
   }
-  .content .button {
-    border-color: rgb(255 255 255 / 25%);
-  }
-  .content .button:hover {
-    background-color: rgb(255 255 255 / 5%);
-  }
   .content .sites {
     border-color: rgb(255 255 255 / 15%);
   }
@@ -160,7 +135,6 @@ body {
     color: #999;
   }
   .content textarea:focus-visible,
-  .content .button:focus-visible,
   .content .sites button:focus-visible,
   .content input[type="checkbox"]:focus-visible {
     outline-color: #45a1ff;
