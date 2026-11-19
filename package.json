@@ -1,14 +1,17 @@
 {
   "name": "mobview",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Browser extension that switches chosen sites to their mobile view with one click",
   "license": "MPL-2.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "test": "node --test tests/*.test.js",
     "lint": "web-ext lint --source-dir src",
     "start": "web-ext run --source-dir src",
-    "build": "web-ext build --source-dir src --artifacts-dir dist --filename mobview-{version}.xpi --overwrite-dest",
+    "build": "node scripts/clean-xpi.js && web-ext build --source-dir src --artifacts-dir dist --filename mobview-{version}.xpi --overwrite-dest",
     "build:chrome": "node scripts/build-chrome.js && web-ext build --source-dir dist/chrome --artifacts-dir dist --filename mobview-chrome-{version}.zip --overwrite-dest"
   },
   "devDependencies": {

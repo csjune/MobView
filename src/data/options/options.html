@@ -9,11 +9,18 @@
   <body>
     <div class="logo"></div>
     <main class="content">
+      <h1 class="visually-hidden">MobView Options</h1>
       <label class="title" for="useragent">Set a mobile user-agent string in the below area</label>
       <textarea id="useragent" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-invalid="false" data-error="useragent-error"></textarea>
       <p id="useragent-error" class="error" hidden>Error: User-Agent must contain only printable ASCII characters.</p>
-      <h2 class="title">Mobile View Sites</h2>
-      <ul id="sites" class="sites"></ul>
+      <h2 id="sites-heading" class="title" tabindex="-1">Mobile View Sites</h2>
+      <form id="add-site-form" class="add-site" novalidate>
+        <label class="visually-hidden" for="site-input">Add site URL or host</label>
+        <input id="site-input" name="site" type="text" inputmode="url" placeholder="example.com or https://m.example.com" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-invalid="false" data-error="site-error">
+        <button id="add-site" type="submit">Add</button>
+      </form>
+      <p id="site-error" class="error" hidden></p>
+      <ul id="sites" class="sites" aria-labelledby="sites-heading"></ul>
       <div class="footer">
         <div class="checkbox" title="Bypass cache when reloading the page (pressing on the toolbar button)">
           <label for="bypass-cache">Bypass cache when reloading</label>

@@ -11,13 +11,40 @@ app.storage = {
   "read": function (id) {
     return app.storage.local[id];
   },
+  "mutate": function (id, applyLocal, persist, fallbackError) {
+    const hadPrev = Object.prototype.hasOwnProperty.call(app.storage.local, id);
+    const prev = app.storage.local[id];
+    applyLocal();
+    return new Promise(function (resolve, reject) {
+      persist(function () {
+        if (chrome.runtime.lastError) {
+          if (hadPrev) {
+            app.storage.local[id] = prev;
+          } else {
+            delete app.storage.local[id];
+          }
+          reject(new Error(chrome.runtime.lastError.message || fallbackError));
+          return;
+        }
+        resolve();
+      });
+    });
+  },
   "write": function (id, data) {
-    app.storage.local[id] = data;
-    chrome.storage.local.set({[id]: data}, app.error);
+    return app.storage.mutate(
+      id,
+      function () {app.storage.local[id] = data;},
+      function (done) {chrome.storage.local.set({[id]: data}, done);},
+      "Failed to save storage"
+    );
   },
   "remove": function (id) {
-    delete app.storage.local[id];
-    chrome.storage.local.remove(id, app.error);
+    return app.storage.mutate(
+      id,
+      function () {delete app.storage.local[id];},
+      function (done) {chrome.storage.local.remove(id, done);},
+      "Failed to remove storage"
+    );
   },
   /* the background is the only writer, so the in-memory copy is read from disk once per wake-up */
   "load": function (callback) {
@@ -34,19 +61,77 @@ app.storage = {
         });
       });
     }
-    return app.storage.ready.then(callback, function (e) {
+    return app.storage.ready.then(callback).catch(function (e) {
       console.error(e);
     });
   },
-  "ready": null
+  "ready": null,
+  "session": (function () {
+    const memory = {};
+    const getNative = function () {
+      return typeof chrome !== "undefined" && chrome.storage && chrome.storage.session;
+    };
+    const callNative = function (native, method, arg, fallbackValue) {
+      return new Promise(function (resolve) {
+        let settled = false;
+        const finish = function (res) {
+          if (settled) return;
+          settled = true;
+          resolve(res);
+        };
+        try {
+          const maybePromise = native[method](arg, function (res) {
+            if (chrome.runtime && chrome.runtime.lastError) {
+              finish(fallbackValue);
+              return;
+            }
+            finish(res);
+          });
+          if (maybePromise && typeof maybePromise.then === "function") {
+            maybePromise.then(finish, function () {
+              finish(fallbackValue);
+            });
+          }
+        } catch (e) {
+          finish(fallbackValue);
+        }
+      });
+    };
+    return {
+      "get": async function (key) {
+        const native = getNative();
+        const store = native ? await callNative(native, "get", key, {}) : memory;
+        if (typeof key === "string") {
+          return store && Object.prototype.hasOwnProperty.call(store, key) ? store[key] : undefined;
+        }
+        if (Array.isArray(key)) {
+          const out = {};
+          key.forEach(function (k) {
+            if (store && Object.prototype.hasOwnProperty.call(store, k)) out[k] = store[k];
+          });
+          return out;
+        }
+        return Object.assign({}, store);
+      },
+      "set": async function (items) {
+        if (!items || typeof items !== "object") return;
+        const native = getNative();
+        if (!native) {
+          Object.assign(memory, items);
+          return;
+        }
+        await callNative(native, "set", items, undefined);
+      }
+    };
+  })()
 };
 
 /* wraps an event callback so that it runs after the storage has been loaded */
 app.loaded = function (callback) {
   return function () {
     const args = arguments;
-    app.storage.load(function () {
-      callback.apply(null, args);
+    return app.storage.load(function () {
+      return callback.apply(null, args);
     });
   };
 };
@@ -67,6 +152,11 @@ app.on = {
     },
     "updated": function (callback) {
       chrome.tabs.onUpdated.addListener(app.loaded(callback));
+    },
+    "replaced": function (callback) {
+      if (chrome.tabs && chrome.tabs.onReplaced) {
+        chrome.tabs.onReplaced.addListener(app.loaded(callback));
+      }
     }
   }
 };
@@ -81,12 +171,46 @@ app.options = {
   }
 };
 
-chrome.runtime.onMessage.addListener(function (request) {
-  if (request && request.path === "options-to-background") {
+app.content = {
+  "message": {},
+  "receive": function (id, callback) {
+    app.content.message[id] = callback;
+  }
+};
+
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
+  if (!request) return;
+  const dispatch = function (table, args, mapResult, fallback) {
+    let responded = false;
+    const reply = function (payload) {
+      if (!responded) {
+        responded = true;
+        if (typeof sendResponse === "function") sendResponse(payload);
+      }
+    };
     app.storage.load(function () {
-      const handler = app.options.message[request.method];
-      if (typeof handler === "function") handler(request.data);
+      const handler = Object.prototype.hasOwnProperty.call(table, request.method) ? table[request.method] : null;
+      if (typeof handler !== "function") {
+        reply(fallback);
+        return;
+      }
+      return Promise.resolve(handler.apply(null, args)).then(function (result) {
+        reply(mapResult(result));
+      });
+    }).then(function () {
+      reply(fallback);
+    }, function () {
+      reply(fallback);
     });
+    return true;
+  };
+  if (request.path === "options-to-background") {
+    return dispatch(app.options.message, [request.data], function (result) {
+      return result && typeof result === "object" ? Object.assign({"ok": true}, result) : {"ok": true};
+    }, {"ok": false});
+  }
+  if (request.path === "content-to-background") {
+    return dispatch(app.content.message, [request.data, sender], function (result) {return result;}, null);
   }
 });
 
@@ -122,11 +246,26 @@ app.contentscripts = {
       }
     }).catch(function () {});
   },
-  "setTabStorage": function (tabId, ua) {
+  "setTabStorage": function (tabId, ua, sites) {
     return chrome.scripting.executeScript({
       "target": {"tabId": tabId, "allFrames": true},
-      "args": [ua],
-      "func": function (value) {
+      "args": [ua, Array.isArray(sites) ? sites : []],
+      "func": function (value, allowedSites) {
+        const normalize = function (v) {
+          return typeof v === "string" ? v.trim().toLowerCase().replace(/\.+$/, "") : "";
+        };
+        const isExactHost = function (h) {
+          return h.startsWith("[") || h.indexOf(".") === -1 || /^\d{1,3}(\.\d{1,3}){3}$/.test(h);
+        };
+        const host = normalize(typeof location !== "undefined" && location ? location.hostname : "");
+        if (!host || !Array.isArray(allowedSites)) return;
+        const matched = allowedSites.some(function (entry) {
+          const site = normalize(entry);
+          if (!site) return false;
+          if (isExactHost(host) || isExactHost(site)) return host === site;
+          return host === site || host.endsWith("." + site);
+        });
+        if (!matched) return;
         try {sessionStorage.setItem("mobview-useragent", value)} catch (e) {}
         try {localStorage.removeItem("mobview-useragent")} catch (e) {}
       }

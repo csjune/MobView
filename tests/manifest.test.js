@@ -4,7 +4,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const {loadBackground} = require("./harness");
-const {buildChrome, resolveChromeVersion} = require("../scripts/build-chrome");
+const {buildChrome, resolveChromeVersion, chromeDefaults} = require("../scripts/build-chrome");
+const {cleanXpi} = require("../scripts/clean-xpi");
 
 const ROOT = path.join(__dirname, "..");
 const SRC = path.join(ROOT, "src");
@@ -26,12 +27,26 @@ function sharedExtensionFiles(dir, targetManifest) {
   return files;
 }
 
-test("package.json and manifest.json versions match", () => {
+test("package.json specifies version matching manifest.json and Node engines >=20.0.0", () => {
   assert.equal(pkg.version, manifest.version);
+  assert.equal(pkg.engines && pkg.engines.node, ">=20.0.0");
 });
 
-test("manifest.json omits contextMenus permission", () => {
+test("manifest.json has required MV3, Gecko, permission, and options_ui fields without contextMenus", () => {
+  assert.equal(manifest.manifest_version, 3);
+  assert.equal(typeof manifest.browser_specific_settings?.gecko?.id, "string");
+  assert.ok(manifest.browser_specific_settings.gecko.id.length > 0);
+  assert.equal(typeof manifest.browser_specific_settings?.gecko?.strict_min_version, "string");
+  assert.ok(manifest.browser_specific_settings.gecko.strict_min_version.length > 0);
+  assert.equal(typeof manifest.browser_specific_settings?.gecko_android?.strict_min_version, "string");
+  assert.ok(manifest.browser_specific_settings.gecko_android.strict_min_version.length > 0);
+  assert.ok(Array.isArray(manifest.host_permissions) && manifest.host_permissions.includes("*://*/*"));
+  for (const perm of ["storage", "scripting", "declarativeNetRequest"]) {
+    assert.ok(manifest.permissions.includes(perm), `missing permission ${perm}`);
+  }
   assert.equal(manifest.permissions.includes("contextMenus"), false);
+  assert.equal(typeof manifest.options_ui?.page, "string");
+  assert.ok(manifest.options_ui.page.length > 0);
 });
 
 test("content scripts in config.js enable matchOriginAsFallback", () => {
@@ -58,9 +73,35 @@ test("options.html removes the test button, disables textarea autocorrect, and w
   assert.ok(errorMatch, "expected <p id=\"useragent-error\"> in options.html");
   assert.match(errorMatch[0], /\bhidden(?:\s*=\s*["'][^"']*["'])?(?=[\s>])/i);
 
+  const addSiteFormMatch = html.match(/<form\b[^>]*\bid\s*=\s*["']add-site-form["'][^>]*>/i);
+  assert.ok(addSiteFormMatch, "expected <form id=\"add-site-form\"> in options.html");
+
+  const siteInputMatch = html.match(/<input\b[^>]*\bid\s*=\s*["']site-input["'][^>]*>/i);
+  assert.ok(siteInputMatch, "expected <input id=\"site-input\"> in options.html");
+  const siteInputTag = siteInputMatch[0];
+  assert.match(siteInputTag, /\bautocorrect\s*=\s*["']off["']/i);
+  assert.match(siteInputTag, /\bautocapitalize\s*=\s*["']none["']/i);
+  assert.match(siteInputTag, /\bspellcheck\s*=\s*["']false["']/i);
+  assert.match(siteInputTag, /\baria-invalid\s*=\s*["']false["']/i);
+  assert.match(siteInputTag, /\bdata-error\s*=\s*["']site-error["']/i);
+  assert.equal(/\baria-describedby\b/i.test(siteInputTag), false);
+
+  const addSiteButtonMatch = html.match(/<button\b[^>]*\bid\s*=\s*["']add-site["'][^>]*>/i);
+  assert.ok(addSiteButtonMatch, "expected <button id=\"add-site\"> in options.html");
+  assert.match(addSiteButtonMatch[0], /\btype\s*=\s*["']submit["']/i);
+
+  const siteErrorMatch = html.match(/<p\b[^>]*\bid\s*=\s*["']site-error["'][^>]*>/i);
+  assert.ok(siteErrorMatch, "expected <p id=\"site-error\"> in options.html");
+  assert.match(siteErrorMatch[0], /\bhidden(?:\s*=\s*["'][^"']*["'])?(?=[\s>])/i);
+
   const announcerMatch = html.match(/<[a-z0-9-]+\b[^>]*\bid\s*=\s*["']status-announcer["'][^>]*>/i);
   assert.ok(announcerMatch, "expected #status-announcer in options.html");
   assert.match(announcerMatch[0], /\baria-live\s*=\s*["']polite["']/i);
+
+  assert.match(html, /<h1\b/i);
+  assert.match(html, /\bid\s*=\s*["']sites-heading["']/i);
+  assert.match(html, /\bid\s*=\s*["']sites["']/i);
+  assert.match(html, /\bid\s*=\s*["']bypass-cache["']/i);
 });
 
 test("page_context Firefox fallback UA literal matches defaults.useragent", () => {
@@ -108,12 +149,13 @@ test("every local asset referenced by options.html and options.css exists", () =
 test("resolveChromeVersion appends Chrome revisions and rejects invalid versions", () => {
   assert.equal(resolveChromeVersion("0.1.1"), "0.1.1.1");
   assert.equal(resolveChromeVersion("0.1.2"), "0.1.2");
-  for (const invalid of ["0.1.1.1.1", "0.1.70000", ""]) {
+  for (const invalid of ["0.1.1.1.1", "0.1.70000", "", "0", "0.0.0", "0.1.1.0"]) {
     assert.throws(() => resolveChromeVersion(invalid), /Invalid Chrome extension version/);
   }
+  assert.throws(() => resolveChromeVersion("0.1.1", {"0.1.1": 0}), /Invalid Chrome extension version/);
 });
 
-test("buildChrome produces a valid Chrome output and cleans stale Chrome zips", (t) => {
+test("buildChrome produces a valid Chrome output, updates page_context fallback without wrapper, and cleans stale Chrome zips", (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mobview-manifest-"));
   t.after(() => fs.rmSync(tmp, {recursive: true, force: true}));
 
@@ -141,6 +183,18 @@ test("buildChrome produces a valid Chrome output and cleans stale Chrome zips", 
   assert.ok(parts.length >= 1 && parts.length <= 4);
   assert.ok(parts.every((part) => /^(?:0|[1-9]\d*)$/.test(part) && Number(part) <= 65535));
 
+  const srcInject = fs.readFileSync(path.join(SRC, "data", "content_script", "page_context", "inject.js"), "utf8");
+  const chromeInject = fs.readFileSync(path.join(outputDir, "data", "content_script", "page_context", "inject.js"), "utf8");
+  const chromeDefaultsFile = loadBackground({dir: outputDir}).context.defaults.useragent;
+  const fallbackMatches = [...chromeInject.matchAll(/^  const fallback = ("(?:[^"\\]|\\.)*");$/gm)].map((m) => JSON.parse(m[1]));
+  assert.equal(chromeDefaultsFile, chromeDefaults.useragent);
+  assert.deepEqual(fallbackMatches, [chromeDefaults.useragent]);
+  assert.equal(chromeInject.includes("mobviewDefaultUserAgent"), false);
+  assert.equal(
+    chromeInject,
+    srcInject.replace(/^  const fallback = "(?:[^"\\]|\\.)*";$/m, `  const fallback = ${JSON.stringify(chromeDefaults.useragent)};`)
+  );
+
   const swFile = chromeManifest.background.service_worker;
   const swPath = path.join(outputDir, swFile);
   assert.ok(fs.existsSync(swPath), `missing ${swFile}`);
@@ -158,4 +212,46 @@ test("buildChrome produces a valid Chrome output and cleans stale Chrome zips", 
   for (const file of files) {
     assert.ok(fs.existsSync(path.join(outputDir, file)), `missing ${file}`);
   }
+});
+
+test("buildChrome preserves existing outputDir and stale Chrome zip when sourceDir has invalid page_context/inject.js", (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mobview-build-fail-"));
+  t.after(() => fs.rmSync(tmp, {recursive: true, force: true}));
+
+  const sourceDir = path.join(tmp, "src");
+  const outputDir = path.join(tmp, "chrome");
+  const artifactsDir = path.join(tmp, "dist");
+  fs.cpSync(SRC, sourceDir, {recursive: true});
+  fs.writeFileSync(path.join(sourceDir, "data", "content_script", "page_context", "inject.js"), "// missing fallback\n");
+
+  fs.mkdirSync(outputDir, {recursive: true});
+  fs.writeFileSync(path.join(outputDir, "sentinel.txt"), "preserve");
+  fs.mkdirSync(artifactsDir, {recursive: true});
+  fs.writeFileSync(path.join(artifactsDir, "mobview-chrome-0.0.0.zip"), "preserve-zip");
+
+  assert.throws(() => buildChrome({sourceDir, outputDir, artifactsDir}), /Expected fallback declaration/);
+  assert.equal(fs.readFileSync(path.join(outputDir, "sentinel.txt"), "utf8"), "preserve");
+  assert.equal(fs.readFileSync(path.join(artifactsDir, "mobview-chrome-0.0.0.zip"), "utf8"), "preserve-zip");
+});
+
+test("cleanXpi deletes mobview-*.xpi artifacts while preserving other files", (t) => {
+  const artifactsDir = fs.mkdtempSync(path.join(os.tmpdir(), "mobview-clean-xpi-"));
+  t.after(() => fs.rmSync(artifactsDir, {recursive: true, force: true}));
+
+  const oldXpi = path.join(artifactsDir, "mobview-0.1.0.xpi");
+  const curXpi = path.join(artifactsDir, "mobview-0.1.1.xpi");
+  const chromeZip = path.join(artifactsDir, "mobview-chrome-0.1.1.1.zip");
+  const otherFile = path.join(artifactsDir, "notes.txt");
+  fs.writeFileSync(oldXpi, "old");
+  fs.writeFileSync(curXpi, "cur");
+  fs.writeFileSync(chromeZip, "zip");
+  fs.writeFileSync(otherFile, "keep");
+
+  const removed = cleanXpi({artifactsDir});
+  assert.deepEqual(removed.sort(), [oldXpi, curXpi].sort());
+  assert.equal(fs.existsSync(oldXpi), false);
+  assert.equal(fs.existsSync(curXpi), false);
+  assert.equal(fs.existsSync(chromeZip), true);
+  assert.equal(fs.existsSync(otherFile), true);
+  assert.deepEqual(cleanXpi({artifactsDir: path.join(artifactsDir, "missing")}), []);
 });
